@@ -34,9 +34,10 @@ This is how to do it using LuaPP:
 void fn(int a, const char* b, int c, double d) {
     // Do stuff
 }
+```
 
 # Related Work
 
 This interpreter is heavily based on Norman Ramsay's LuaML interpreter written
-in OCaml. Both these papers [1](http://citeseerx.ist.psu.edu/viewdoc/download?doi=10.1.1.368.334&rep=rep1&type=pdf) and [2](https://www.cs.tufts.edu/~nr/pubs/maniaws.pdf) present the main ideas that are 
-used in LuaPP.
+in OCaml. Both [\[1\]](http://citeseerx.ist.psu.edu/viewdoc/download?doi=10.1.1.368.334&rep=rep1&type=pdf) and [\[2\]](https://www.cs.tufts.edu/~nr/pubs/maniaws.pdf) present the main ideas that are 
+used in LuaPP. https://github.com/nrnrnr/qc-- is an example of a tool that uses LuaML.
