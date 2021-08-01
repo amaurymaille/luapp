@@ -1,12 +1,15 @@
 #include <any>
 #include <cassert>
 #include <cctype>
+#include <cstring>
 #include <functional>
 #include <iostream>
 #include <map>
 #include <memory>
 #include <optional>
+#include <sstream>
 #include <type_traits>
+#include <typeinfo>
 #include <utility>
 #include <vector>
 
@@ -66,6 +69,22 @@ public:
     const char* what() const noexcept {
         return "Attempt to bind more effective arguments than function's formal arguments count";
     }
+};
+
+class BadArgumentType : public std::exception {
+public:
+    BadArgumentType(std::type_info const& expected, std::type_info const& received) {
+        std::ostringstream stream;
+        stream << "Invalid argument type: expected " << expected.name() << ", got " << received.name();
+        _content = std::move(stream.str());
+    }
+
+    const char* what() const noexcept {
+        return _content.c_str();
+    }
+
+private:
+    std::string _content;
 };
 
 template<typename F>
@@ -184,7 +203,11 @@ public:
     void configure_bind_fn() {
         (*_bind_fn) = [&](std::any a, size_t pos) {
             // std::cout << "Calling lambda with this = " << &(*this) << std::endl;
-            this->bind_next(std::any_cast<ArgType>(a), pos);
+            try {
+                this->bind_next(std::any_cast<ArgType>(a), pos);
+            } catch (std::bad_any_cast& e) {
+                throw BadArgumentType(typeid(ArgType), a.type());
+            }
         };
     }
 
@@ -357,7 +380,7 @@ int main() {
     try {
         std::cout << "tutu()" << std::endl;
         auto res = parse_function_invocation(map, "tutu()");
-        std::cout << "Result = " << std::any_cast<int>(*res) << std::endl;
+        assert(false);
     } catch (PartialFunctionCall& e) {
 
     } catch (std::exception& e) {
@@ -378,8 +401,20 @@ int main() {
     try {
         std::cout << "tutu(Int:12,Float:3.5)" << std::endl;
         auto res = parse_function_invocation(map, "tutu(Int:12,Float:3.5)");
-        std::cout << "Result = " << std::any_cast<int>(*res) << std::endl;
+        assert(false);
     } catch (FunctionArgumentCountOverflow& e) {
+
+    } catch (std::exception& e) {
+        assert(false);
+    }
+
+    std::cout << std::endl;
+
+    try {
+        std::cout << "tutu(Double:12)" << std::endl;
+        auto res = parse_function_invocation(map, "tutu(Double:12)");
+        assert(false);
+    } catch (BadArgumentType& e) {
 
     } catch (std::exception& e) {
         assert(false);
