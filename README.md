@@ -15,7 +15,7 @@ Lua, using the standard Lua interpreter:
 // Function signature: int -> const char* -> int -> double -> void
 int fn(lua_State* L) {
     // Get parameters from the stack. Error-prone as one can typo the type of
-the argument, or its position in the list
+    // the argument, or its position in the list
     int a = luaL_checkinteger(L, 1);
     const char* b = luaL_checkstring(L, 2);
     int c = luaL_checkinteger(L, 3);
