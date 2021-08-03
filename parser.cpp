@@ -666,7 +666,11 @@ public:
                 }
 
             case OperatorMulDivMod::QUOT:
-                return Types::Value::make(std::floor(left / right));
+                if (leftV.is<int>() && rightV.is<int>()) {
+                    return Types::Value::make<int>(std::floor(left / right));
+                } else {
+                    return Types::Value::make(std::floor(left / right));
+                }
 
             default:
                 throw std::runtime_error("Invalid MulDivMod operator");
