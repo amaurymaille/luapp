@@ -331,18 +331,23 @@ namespace Types {
         // Decision: conversion from string to integer yields double in the
         // Lua 5.3.2 interpreter, I've decided to yield the appropriate type
         // instead.
-        Value from_string_to_number() const {
+        Value from_string_to_number(bool force_double = false) const {
             if (!is<std::string>()) {
                 throw Exceptions::ContextlessBadTypeException("string", type_as_string());
             }
 
             Value v;
-            try {
-                v._type = as_int_weak();
-            } catch (std::invalid_argument& e) {
+            if (force_double) {
                 v._type = as_double_weak();
-            } catch (std::out_of_range& e) {
-                throw;
+                return v;
+            } else {
+                try {
+                    v._type = as_int_weak();
+                } catch (std::invalid_argument& e) {
+                    v._type = as_double_weak();
+                } catch (std::out_of_range& e) {
+                    throw;
+                }
             }
 
             return v;
@@ -614,14 +619,19 @@ public:
             case OperatorUnary::BIN_NOT:
                 return Types::Value::make(~v.as_int_weak());
 
-            case OperatorUnary::MINUS:
-                if (v.is<int>()) {
-                    return Types::Value::make(-v.as<int>());
-                } else if (v.is<double>()){
-                    return Types::Value::make(-v.as<double>());
-                } else if (v.is<std::string>()) {
-                    return v.from_string_to_number();
-                }
+            case OperatorUnary::MINUS: {
+                std::function<Types::Value(Types::Value)> convert = [&](Types::Value value) -> Types::Value {
+                    if (value.is<int>()) {
+                        return Types::Value::make(-value.as<int>());
+                    } else if (value.is<double>()) {
+                        return Types::Value::make(-value.as<double>());
+                    } else {
+                        return convert(value.from_string_to_number(true));
+                    }
+                };
+
+                return convert(v);
+            }
 
             case OperatorUnary::NOT:
                 return Types::Value::make_bool(!v.as_bool_weak());
