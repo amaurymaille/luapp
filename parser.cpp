@@ -660,7 +660,7 @@ public:
 
             case OperatorMulDivMod::MOD:
                 if (leftV.is<int>() && rightV.is<int>()) {
-                    return Types::Value::make(std::floor(leftV.as<int>() % rightV.as<int>()));
+                    return Types::Value::make(leftV.as<int>() % rightV.as<int>());
                 } else {
                     return Types::Value::make(std::remainder(left, right));
                 }
