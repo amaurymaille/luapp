@@ -817,11 +817,7 @@ public:
             bool right = rightV.as_bool_weak();
 
             if (left) {
-                if (right) {
-                    return rightV;
-                } else {
-                    return leftV;
-                }
+                return leftV;
             } else {
                 return rightV; // false or nil == nil, nil or false == false
             }
