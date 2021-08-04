@@ -630,6 +630,12 @@ public:
 
     }
 
+    ~MyLuaVisitor() {
+        for (Types::Value* value: std::views::values(_global_values)) {
+            value->remove_reference();
+        }
+    }
+
     virtual antlrcpp::Any visitChunk(LuaParser::ChunkContext *context) {
         // std::cout << "Chunk: " << context->getText() << std::endl;
         visit(context->block());
@@ -646,6 +652,10 @@ public:
 
         if (LuaParser::RetstatContext* ctx = context->retstat()) {
             return visit(ctx);
+        }
+
+        for (auto& value: std::views::values(_local_values.top())) {
+            value->remove_reference();
         }
 
         _local_values.pop();
