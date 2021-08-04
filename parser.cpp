@@ -1,5 +1,6 @@
 #include <algorithm>
 #include <cmath>
+#include <cstring>
 #include <exception>
 #include <filesystem>
 #include <fstream>
@@ -1618,10 +1619,11 @@ int main() {
     antlr4::tree::ParseTree* tree = parser.chunk();
     std::cout << tree->toStringTree(&parser, true) << std::endl;
     MyLuaVisitor visitor;
-    // try { visitor.visit(tree); } catch (std::exception& e) { std::cerr << "Parse base error: " << e.what() << std::endl; }
+    try { visitor.visit(tree); } catch (std::exception& e) { std::cerr << "Parse base error: " << e.what() << std::endl; }
 
-    tests();
+    if (argc == 2 && !strcmp(argv[1], "--test")) {
+        tests();
+    }
 
-    Types::Value::free();
     return 0;
 }
