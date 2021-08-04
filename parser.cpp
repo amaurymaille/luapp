@@ -97,21 +97,21 @@ namespace Types {
     struct Value;
 
     struct Nil {
-        bool operator==(const Nil& other) const {
+        bool operator==(const Nil&) const {
             return true;
         }
 
-        bool operator!=(const Nil& other) const {
+        bool operator!=(const Nil&) const {
             return false;
         }
     };
 
     struct Elipsis {
-        bool operator==(const Elipsis& other) const {
+        bool operator==(const Elipsis&) const {
             return false;
         }
 
-        bool operator!=(const Elipsis& other) const {
+        bool operator!=(const Elipsis&) const {
             return true;
         }
     };
@@ -155,12 +155,12 @@ namespace Types {
     private:
         struct FieldVisitor {
         public:
-            FieldVisitor(Table& t, Value* key, Value* value) : _t(t), _key(key), _value(value) { }
+            FieldVisitor(Table& t, Value* key, Value* value) : _key(key), _value(value), _t(t) { }
 
             ~FieldVisitor();
 
             // Can't have nil as key
-            void operator()(Nil nil) { }
+            void operator()(Nil) { }
 
             void operator()(int i) {
                 _t._int_fields[i] = _value;
@@ -701,7 +701,7 @@ public:
         return result;
     }
 
-    virtual antlrcpp::Any visitAttrib(LuaParser::AttribContext *context) {
+    virtual antlrcpp::Any visitAttrib(LuaParser::AttribContext *) {
         std::cerr << "Attributes are not supported" << std::endl;
         return Types::Value::make_nil();
     }
@@ -758,7 +758,7 @@ public:
             return visit(ctx);
         } else if (LuaParser::TableconstructorContext* ctx = context->tableconstructor()) {
             return visit(ctx);
-        } else if (LuaParser::OperatorPowerContext* ctx = context->operatorPower()) {
+        } else if (context->operatorPower()) {
             // Promote both operands (if int or string representing double) to
             // double for exponentiation.
             Types::Value* leftV = visit(context->exp()[0]).as<Types::Value*>();
@@ -912,7 +912,7 @@ public:
             rightV->remove_reference_if_free();
 
             return result;
-        } else if (LuaParser::OperatorStrcatContext* ctx = context->operatorStrcat()) {
+        } else if (context->operatorStrcat()) {
             // Promote numbers to strings if necessary.
             // Note that Lua allows two numbers to concatenate as a string.
             Types::Value* leftV = visit(context->exp()[0]).as<Types::Value*>();
@@ -968,7 +968,7 @@ public:
             rightV->remove_reference_if_free();
 
             return Types::Value::make_bool(fn(left, right));
-        } else if (LuaParser::OperatorAndContext* ctx = context->operatorAnd()) {
+        } else if (context->operatorAnd()) {
             Types::Value* leftV = visit(context->exp()[0]).as<Types::Value*>();
             bool left = leftV->as_bool_weak();
             Types::Value* rightV = visit(context->exp()[1]).as<Types::Value*>();
@@ -983,7 +983,7 @@ public:
                 rightV->remove_reference_if_free();
                 return leftV; // false and nil == false, nil and false == nil
             }
-        } else if (LuaParser::OperatorOrContext* ctx = context->operatorOr()) {
+        } else if (context->operatorOr()) {
             Types::Value* leftV = visit(context->exp()[0]).as<Types::Value*>();
             Types::Value* rightV = visit(context->exp()[1]).as<Types::Value*>();
 
@@ -1189,15 +1189,15 @@ public:
         }
     }
 
-    virtual antlrcpp::Any visitFieldsep(LuaParser::FieldsepContext *context) {
+    virtual antlrcpp::Any visitFieldsep(LuaParser::FieldsepContext *) {
         return nullptr;
     }
 
-    virtual antlrcpp::Any visitOperatorOr(LuaParser::OperatorOrContext *context) {
+    virtual antlrcpp::Any visitOperatorOr(LuaParser::OperatorOrContext *) {
         return nullptr;
     }
 
-    virtual antlrcpp::Any visitOperatorAnd(LuaParser::OperatorAndContext *context) {
+    virtual antlrcpp::Any visitOperatorAnd(LuaParser::OperatorAndContext *) {
         return nullptr;
     }
 
@@ -1221,7 +1221,7 @@ public:
         }
     }
 
-    virtual antlrcpp::Any visitOperatorStrcat(LuaParser::OperatorStrcatContext *context) {
+    virtual antlrcpp::Any visitOperatorStrcat(LuaParser::OperatorStrcatContext *) {
         return nullptr;
     }
 
@@ -1287,7 +1287,7 @@ public:
         }
     }
 
-    virtual antlrcpp::Any visitOperatorPower(LuaParser::OperatorPowerContext *context) {
+    virtual antlrcpp::Any visitOperatorPower(LuaParser::OperatorPowerContext *) {
         return nullptr;
     }
 

@@ -5,6 +5,8 @@ project(template_erasure LANGUAGES CXX)
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
+set (CMAKE_CXX_FLAGS "-Wall -Wextra")
+
 # find_package(antlr4-runtime REQUIRED)
 find_package(Boost REQUIRED)
 
