@@ -204,6 +204,47 @@ namespace Types {
         std::map<Value*, Value*> _fields;
     };
 
+    template<typename T>
+    struct IsReference;
+
+    template<>
+    struct IsReference<Nil> : public std::false_type {};
+
+    template<>
+    struct IsReference<Elipsis> : public std::false_type {};
+
+    template<>
+    struct IsReference<Function*> : public std::true_type {};
+
+    template<>
+    struct IsReference<Table*> : public std::true_type {};
+
+    template<>
+    struct IsReference<Userdata*> : public std::true_type {};
+
+    template<>
+    struct IsReference<int> : public std::false_type {};
+
+    template<>
+    struct IsReference<double> : public std::false_type {};
+
+    template<>
+    struct IsReference<bool> : public std::false_type {};
+
+    template<>
+    struct IsReference<std::string> : public std::false_type {};
+
+    template<typename T>
+    constexpr bool IsReferenceV = IsReference<std::decay_t<T>>::value;
+
+    class IsReferenceChecker {
+    public:
+        template<typename T>
+        constexpr bool operator()(T&&) const {
+            return IsReferenceV<T>;
+        }
+    };
+
     class Value {
     public:
         friend Table::Table(const std::map<Value *, Value *>&);
@@ -246,6 +287,10 @@ namespace Types {
 
         bool operator!=(const Value& other) const {
             return !(*this == other);
+        }
+
+        constexpr bool is_reference() const {
+            return std::visit(IsReferenceChecker(), _type);
         }
 
         template<typename T>
@@ -836,7 +881,8 @@ public:
 
             std::string expression(context->nameAndArgs()[0]->args()->explist()->exp()[0]->getText());
 
-            if (left != middle) {
+            // Do not attempt to perform equality checks on reference types
+            if (!left.is_reference() && left != middle) {
                 throw Exceptions::ValueEqualityExpected(expression, middle.value_as_string(), left.value_as_string());
             }
             std::string type(right.as<std::string>());
