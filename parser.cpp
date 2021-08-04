@@ -878,7 +878,7 @@ public:
             std::string expression(context->nameAndArgs()[0]->args()->explist()->exp()[0]->getText());
 
             // Do not attempt to perform equality checks on reference types
-            if (!left.is_reference() && left != middle) {
+            if (!middle.is_reference() && left != middle) {
                 throw Exceptions::ValueEqualityExpected(expression, middle.value_as_string(), left.value_as_string());
             }
             std::string type(right.as<std::string>());
