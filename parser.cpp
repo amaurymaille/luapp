@@ -638,6 +638,8 @@ public:
 
     virtual antlrcpp::Any visitBlock(LuaParser::BlockContext *context) {
         // std::cout << "Block: " << context->getText() << std::endl;
+        _local_values.push(ValueStore());
+
         for (LuaParser::StatContext* ctx: context->stat()) {
             visit(ctx);
         }
@@ -645,6 +647,8 @@ public:
         if (LuaParser::RetstatContext* ctx = context->retstat()) {
             return visit(ctx);
         }
+
+        _local_values.pop();
 
         return Types::Value::make_nil();
     }
@@ -1413,11 +1417,12 @@ private:
         auto values_iter = values.begin();
 
         for (; names_iter != names.end() && values_iter != values.end(); ++names_iter, ++values_iter) {
-            if (_local_values.find(*names_iter) != _local_values.end()) {
+            // Apparently Lua allows local a = 12; local a = 12...
+            /* if (_local_values.top().find(*names_iter) != _local_values.top().end()) {
                 throw Exceptions::NameAlreadyUsedException(*names_iter);
-            }
+            } */
 
-            _local_values[*names_iter] = *values_iter;
+            _local_values.top()[*names_iter] = *values_iter;
             (*values_iter)->bind();
         }
     }
@@ -1431,7 +1436,14 @@ private:
         return Types::Value::make_nil();
     }
 
-    std::map<std::string, Types::Value*> _local_values;
+    typedef std::map<std::string, Types::Value*> ValueStore;
+
+    // Scope processing works like a stack. Each time a new scope is
+    // entered, push a new map on top of the stack to store the local
+    // Values of the scope. Once the scope is exited, pop this map from
+    // the stack.
+    std::stack<ValueStore> _local_values;
+    ValueStore _global_values;
 };
 
 /* template<typename Expected>
