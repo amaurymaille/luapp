@@ -1,0 +1,13 @@
+ensure_value_type(false or false, false, "bool")
+ensure_value_type(true or false, true, "bool")
+ensure_value_type(false or true, true, "bool")
+ensure_value_type(true or true, true, "bool")
+ensure_value_type(nil or false, nil, "bool")
+ensure_value_type(false or nil, nil, "nil")
+
+ensure_value_type(false or 1, 1, "int")
+ensure_value_type({} or 1, {}, "table")
+ensure_value_type(false or {}, {}, "table")
+ensure_value_type(nil or {}, {}, "table")
+ensure_value_type("toto" or nil, "toto", "string")
+ensure_value_type("toto" or false, "toto", "string")
