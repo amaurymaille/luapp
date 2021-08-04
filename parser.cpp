@@ -638,20 +638,20 @@ public:
 
     virtual antlrcpp::Any visitChunk(LuaParser::ChunkContext *context) {
         // std::cout << "Chunk: " << context->getText() << std::endl;
-        visit(context->block());
-        return Types::Value::make_nil();
+        return visit(context->block());
     }
 
     virtual antlrcpp::Any visitBlock(LuaParser::BlockContext *context) {
         // std::cout << "Block: " << context->getText() << std::endl;
         _local_values.push(ValueStore());
+        antlrcpp::Any retval = Types::Value::make_nil();
 
         for (LuaParser::StatContext* ctx: context->stat()) {
             visit(ctx);
         }
 
         if (LuaParser::RetstatContext* ctx = context->retstat()) {
-            return visit(ctx);
+            retval = visit(ctx);
         }
 
         for (auto& value: std::views::values(_local_values.top())) {
@@ -660,7 +660,7 @@ public:
 
         _local_values.pop();
 
-        return Types::Value::make_nil();
+        return retval;
     }
 
     virtual antlrcpp::Any visitStat(LuaParser::StatContext *context) {
