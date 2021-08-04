@@ -161,17 +161,7 @@ namespace Types {
         }
     };
 
-    typedef std::variant<bool, int*, double*, std::string*, Nil, Elipsis, Function*, Userdata*, Table*> LuaValue;
-
-    template<typename T>
-    constexpr bool is_refcounted_v =
-            std::negation_v<
-                std::disjunction<
-                    std::is_same<T, bool>,
-                    std::is_same<T, Elipsis>,
-                    std::is_same<T, Nil>
-                >
-            >;
+    typedef std::variant<bool, int, double, std::string, Nil, Elipsis, Function*, Userdata*, Table*> LuaValue;
 
     struct Function {
         bool operator==(const Function& other) const {
@@ -217,13 +207,13 @@ namespace Types {
             // Can't have nil as key
             void operator()(Nil) { }
 
-            void operator()(int* i);
+            void operator()(int i);
 
-            void operator()(double* d);
+            void operator()(double d);
 
             void operator()(bool b);
 
-            void operator()(std::string* s);
+            void operator()(std::string const& s);
 
             void operator()(Function* f);
 
@@ -245,13 +235,13 @@ namespace Types {
 
             Value operator()(Nil);
 
-            Value operator()(int* i);
+            Value operator()(int i);
 
-            Value operator()(double* d);
+            Value operator()(double d);
 
             Value operator()(bool b);
 
-            Value operator()(std::string* s);
+            Value operator()(std::string const& s);
 
             Value operator()(Function* f);
 
@@ -299,16 +289,16 @@ namespace Types {
     struct IsReference<Userdata*> : public std::true_type {};
 
     template<>
-    struct IsReference<int*> : public std::false_type {};
+    struct IsReference<int> : public std::false_type {};
 
     template<>
-    struct IsReference<double*> : public std::false_type {};
+    struct IsReference<double> : public std::false_type {};
 
     template<>
     struct IsReference<bool> : public std::false_type {};
 
     template<>
-    struct IsReference<std::string*> : public std::false_type {};
+    struct IsReference<std::string> : public std::false_type {};
 
     template<typename T>
     constexpr bool IsReferenceV = IsReference<std::decay_t<T>>::value;
@@ -356,10 +346,11 @@ namespace Types {
             void operator()(T value) { /* std::cout << "Deleting at " << value << std::endl; */ delete value; }
 
             void operator()(bool) { }
-
             void operator()(Nil) { }
-
             void operator()(Elipsis) { }
+            void operator()(int) { }
+            void operator()(double) { }
+            void operator()(std::string const&) { }
         };
     };
 
@@ -377,12 +368,8 @@ namespace Types {
             }
         }
 
-        constexpr bool is_reference() const {
+        constexpr bool is_refcounted() const {
             return std::visit(IsReferenceChecker(), _type);
-        }
-
-        constexpr bool is_refcounted() {
-            return !(is<Nil>() || is<bool>() || is<Elipsis>());
         }
 
         Value& operator=(const Value& other) {
@@ -418,16 +405,16 @@ namespace Types {
             }
 
             if (_type.index() == other._type.index()) {
-                if (is<double*>()) {
-                    double diff = std::fabs(*as<double*>() - *other.as<double*>());
-                    double eps (std::numeric_limits<double>::epsilon() * std::max(1.0, std::max(std::fabs(*as<double*>()), std::fabs(*other.as<double*>()))));
+                if (is<double>()) {
+                    double diff = std::fabs(as<double>() - other.as<double>());
+                    double eps (std::numeric_limits<double>::epsilon() * std::max(1.0, std::max(std::fabs(as<double>()), std::fabs(other.as<double>()))));
                     return diff <= eps;
-                } else if (is<int*>()) {
-                    return *as<int*>() == *other.as<int*>();
+                } else if (is<int>()) {
+                    return as<int>() == other.as<int>();
                 } else if (is<bool>()) {
                     return as<bool>() == other.as<bool>();
-                } else if (is<std::string*>()) {
-                    return *as<std::string*>() == *other.as<std::string*>();
+                } else if (is<std::string>()) {
+                    return as<std::string>() == other.as<std::string>();
                 } else if (is<Nil>() || is<Elipsis>()) {
                     return true;
                 } else if (is<Table*>()) {
@@ -440,10 +427,10 @@ namespace Types {
             } else {
                 // Equality between ints and doubles is allowed.
                 // Conversion from string to int / double is not allowed here.
-                if (is<double*>() && other.is<int*>()) {
-                    return *as<double*>() == other.as_double_weak();
-                } else if (is<int*>() && other.is<double*>()) {
-                    return *as<int*>() == other.as_int_weak();
+                if (is<double>() && other.is<int>()) {
+                    return as<double>() == other.as_double_weak();
+                } else if (is<int>() && other.is<double>()) {
+                    return as<int>() == other.as_int_weak();
                 } else if (is<bool>()) {
                     return as<bool>() == other.as_bool_weak();
                 } else if (other.is<bool>()) {
@@ -477,15 +464,15 @@ namespace Types {
         }
 
         std::string as_string() const {
-            if (is<std::string*>()) {
-                return *as<std::string*>();
-            } else if (is<int*>()) {
+            if (is<std::string>()) {
+                return as<std::string>();
+            } else if (is<int>()) {
                 std::ostringstream stream;
-                stream << *as<int*>();
+                stream << as<int>();
                 return stream.str();
-            } else if (is<double*>()) {
+            } else if (is<double>()) {
                 std::ostringstream stream;
-                stream << *as<double*>();
+                stream << as<double>();
                 return stream.str();
             } else {
                 throw Exceptions::ContextlessBadTypeException("number or string", type_as_string());
@@ -493,13 +480,13 @@ namespace Types {
         }
 
         int as_int_weak(bool allow_double = true) const {
-            if (is<int*>()) {
-                return *as<int*>();
-            } else if (is<double*>()) {
+            if (is<int>()) {
+                return as<int>();
+            } else if (is<double>()) {
                 if (!allow_double) {
                     throw Exceptions::ContextlessBadTypeException("integer or integer-string", "double");
                 }
-                double d = *as<double*>();
+                double d = as<double>();
                 double intpart;
                 if (std::modf(d, &intpart) == 0.0) {
                     return d;
@@ -507,9 +494,9 @@ namespace Types {
                     // Conversion from double to int is not allowed to fail
                     throw Exceptions::ContextlessBadTypeException("integer", "double");
                 }
-            } else if (is<std::string*>()) {
+            } else if (is<std::string>()) {
                 try {
-                    double d = std::stod(*as<std::string*>());
+                    double d = std::stod(as<std::string>());
                     double intpart;
                     if (std::modf(d, &intpart) == 0.0) {
                         return d;
@@ -517,7 +504,7 @@ namespace Types {
                         throw Exceptions::ContextlessBadTypeException("weak integer", "string of double");
                     }
                 } catch (std::invalid_argument& e) {
-                    return std::stoi(*as<std::string*>());
+                    return std::stoi(as<std::string>());
                 }
             } else {
                 throw Exceptions::ContextlessBadTypeException("weak integer", type_as_string());
@@ -525,12 +512,12 @@ namespace Types {
         }
 
         double as_double_weak() const {
-            if (is<double*>()) {
-                return *as<double*>();
-            } else if (is<int*>()) {
-                return *as<int*>();
-            } else if (is<std::string*>()) {
-                return std::stod(*as<std::string*>());
+            if (is<double>()) {
+                return as<double>();
+            } else if (is<int>()) {
+                return as<int>();
+            } else if (is<std::string>()) {
+                return std::stod(as<std::string>());
             } else {
                 throw Exceptions::ContextlessBadTypeException("weak double", type_as_string());
             }
@@ -556,19 +543,19 @@ namespace Types {
         // Lua 5.3.2 interpreter, I've decided to yield the appropriate type
         // instead.
         Value from_string_to_number(bool force_double = false) const {
-            if (!is<std::string*>()) {
+            if (!is<std::string>()) {
                 throw Exceptions::ContextlessBadTypeException("string", type_as_string());
             }
 
             Value v;
             if (force_double) {
-                alloc<double>(v, as_double_weak());
+                v._type = as_double_weak();
                 return v;
             } else {
                 try {
-                    alloc<int>(v, as_int_weak());
+                    v._type = as_int_weak();
                 } catch (std::invalid_argument& e) {
-                    alloc<double>(v, as_double_weak());
+                    v._type = as_double_weak();
                 } catch (std::out_of_range& e) {
                     throw;
                 }
@@ -602,19 +589,19 @@ namespace Types {
 
         static Value make_string(std::string&& string) {
             Value v;
-            alloc<std::string>(v, std::move(string));
+            v._type = std::move(string);
             return v;
         }
 
         static Value make_int(int i) {
             Value v;
-            alloc<int>(v, i);
+            v._type = i;
             return v;
         }
 
         static Value make_double(double d) {
             Value v;
-            alloc<double>(v, d);
+            v._type = d;
             return v;
         }
 
@@ -628,11 +615,11 @@ namespace Types {
         std::string type_as_string() const {
             if (is<Nil>()) {
                 return "nil";
-            } else if (is<double*>()) {
+            } else if (is<double>()) {
                 return "double";
-            } else if (is<int*>()) {
+            } else if (is<int>()) {
                 return "int";
-            } else if (is<std::string*>()) {
+            } else if (is<std::string>()) {
                 return "string";
             } else if (is<Function*>()) {
                 return "function";
@@ -651,12 +638,12 @@ namespace Types {
             std::ostringstream result;
             if (is<Nil>()) {
                 result << "nil";
-            } else if (is<double*>()) {
-                result << *as<double*>();
-            } else if (is<int*>()) {
-                result << *as<int*>();
-            } else if (is<std::string*>()) {
-                result << *as<std::string*>();
+            } else if (is<double>()) {
+                result << as<double>();
+            } else if (is<int>()) {
+                result << as<int>();
+            } else if (is<std::string>()) {
+                result << as<std::string>();
             } else if (is<Function*>()) {
                 result << as<Function*>();
             } else if (is<Userdata*>()) {
@@ -757,20 +744,20 @@ namespace Types {
         }
     }
 
-    void Table::FieldSetter::operator()(int* i) {
-        _t._int_fields[*i] = _value;
+    void Table::FieldSetter::operator()(int i) {
+        _t._int_fields[i] = _value;
     }
 
-    void Table::FieldSetter::operator()(double* d) {
-        _t._double_fields[*d] = _value;
+    void Table::FieldSetter::operator()(double d) {
+        _t._double_fields[d] = _value;
     }
 
-    void Table::FieldSetter:: operator()(bool b) {
+    void Table::FieldSetter::operator()(bool b) {
         _t._bool_fields[b ? 1 : 0] = _value;
     }
 
-    void Table::FieldSetter::operator()(std::string* s) {
-        _t._string_fields[*s] = _value;
+    void Table::FieldSetter::operator()(std::string const& s) {
+        _t._string_fields[s] = _value;
     }
 
     void Table::FieldSetter::operator()(Function* f) {
@@ -785,13 +772,13 @@ namespace Types {
         _t._userdata_fields[u] = _value;
     }
 
-    Value Table::FieldGetter::operator()(int* i) { return _t._int_fields[*i]; }
+    Value Table::FieldGetter::operator()(int i) { return _t._int_fields[i]; }
 
-    Value Table::FieldGetter::operator()(double* d) { return _t._double_fields[*d]; }
+    Value Table::FieldGetter::operator()(double d) { return _t._double_fields[d]; }
 
     Value Table::FieldGetter::operator()(bool b) { return _t._bool_fields[b]; }
 
-    Value Table::FieldGetter::operator()(std::string* s) { return _t._string_fields[*s]; }
+    Value Table::FieldGetter::operator()(std::string const& s) { return _t._string_fields[s]; }
 
     Value Table::FieldGetter::operator()(Function* f) { return _t._function_fields[f]; }
 
@@ -970,8 +957,8 @@ public:
 
             switch (op) {
             case OperatorUnary::BANG:
-                if (v.is<std::string*>()) {
-                    return Types::Value::make_int(v.as<std::string*>()->size());
+                if (v.is<std::string>()) {
+                    return Types::Value::make_int(v.as<std::string>().size());
                 } else {
                     return Types::Value::make_int(v.as<Types::Table*>()->border());
                 }
@@ -983,10 +970,10 @@ public:
             case OperatorUnary::MINUS: {
                 std::function<Types::Value(Types::Value const&)> convert = [&](Types::Value const& value) -> Types::Value {
                     Types::Value result;
-                    if (value.is<int*>()) {
-                        result =  Types::Value::make_int(-(*value.as<int*>()));
-                    } else if (value.is<double*>()) {
-                        result = Types::Value::make_double(-(*value.as<double*>()));
+                    if (value.is<int>()) {
+                        result =  Types::Value::make_int(-value.as<int>());
+                    } else if (value.is<double>()) {
+                        result = Types::Value::make_double(-value.as<double>());
                     } else {
                         result = convert(value.from_string_to_number(true));
                     }
@@ -1016,8 +1003,8 @@ public:
             OperatorMulDivMod op = visit(ctx).as<OperatorMulDivMod>();
             switch (op) {
             case OperatorMulDivMod::MUL:
-                if (leftV.is<int*>() && rightV.is<int*>()) {
-                    result = Types::Value::make_int(*leftV.as<int*>() * *rightV.as<int*>());
+                if (leftV.is<int>() && rightV.is<int>()) {
+                    result = Types::Value::make_int(leftV.as<int>() * rightV.as<int>());
                 } else {
                     result = Types::Value::make_double(left * right);
                 }
@@ -1028,15 +1015,15 @@ public:
                 break;
 
             case OperatorMulDivMod::MOD:
-                if (leftV.is<int*>() && rightV.is<int*>()) {
-                    result = Types::Value::make_int(*leftV.as<int*>() % *rightV.as<int*>());
+                if (leftV.is<int>() && rightV.is<int>()) {
+                    result = Types::Value::make_int(leftV.as<int>() % rightV.as<int>());
                 } else {
                     result = Types::Value::make_double(std::remainder(left, right));
                 }
                 break;
 
             case OperatorMulDivMod::QUOT:
-                if (leftV.is<int*>() && rightV.is<int*>()) {
+                if (leftV.is<int>() && rightV.is<int>()) {
                     result = Types::Value::make_int(std::floor(left / right));
                 } else {
                     result = Types::Value::make_double(std::floor(left / right));
@@ -1055,9 +1042,9 @@ public:
             Types::Value result;
 
             OperatorAddSub op = visit(ctx);
-            if (leftV.is<int*>() && rightV.is<int*>()) {
-                int left = *leftV.as<int*>();
-                int right = *rightV.as<int*>();
+            if (leftV.is<int>() && rightV.is<int>()) {
+                int left = leftV.as<int>();
+                int right = rightV.as<int>();
 
                 switch (op) {
                 case OperatorAddSub::ADD:
@@ -1234,17 +1221,17 @@ public:
             std::string expression(context->nameAndArgs()[0]->args()->explist()->exp()[0]->getText());
 
             // Do not attempt to perform equality checks on reference types
-            if (!middle.is_reference() && left != middle) {
+            if (!middle.is_refcounted() && left != middle) {
                 throw Exceptions::ValueEqualityExpected(expression, middle.value_as_string(), left.value_as_string());
             }
-            std::string type(std::move(*right.as<std::string*>()));
+            std::string type(std::move(right.as<std::string>()));
             if (type != "int" && type != "double" && type != "string" && type != "table" && type != "bool" && type != "nil") {
                 throw std::runtime_error("Invalid type in ensure_type " + type);
             }
 
-            if ((type == "int" && !left.is<int*>()) ||
-                (type == "double" && !left.is<double*>()) ||
-                (type == "string" && !left.is<std::string*>()) ||
+            if ((type == "int" && !left.is<int>()) ||
+                (type == "double" && !left.is<double>()) ||
+                (type == "string" && !left.is<std::string>()) ||
                 (type == "table" && !left.is<Types::Table*>()) ||
                 (type == "bool" && !left.is<bool>()) ||
                 (type == "nil" && !left.is<Types::Nil>())) {
