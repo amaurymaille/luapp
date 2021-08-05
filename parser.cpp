@@ -1490,18 +1490,26 @@ public:
         LuaParser::Var_Context* var_context = context->varOrExp()->var_();
         std::string funcname(var_context->NAME()->getText());
 
-        if (funcname != "ensure_value_type" && funcname != "expect_failure") {
+        std::vector<std::string> allowed_names = {
+            "ensure_value_type",
+            "expect_failure",
+            "print",
+            "globals",
+            "locals",
+            "memory"
+        };
+
+        if (!std::any_of(allowed_names.begin(), allowed_names.end(), [funcname](const std::string& str) {
+            return funcname == str;
+        })) {
             return nyi("Functioncall#2");
         }
 
-        std::string expression(context->nameAndArgs()[0]->args()->explist()->exp()[0]->getText());
-
         if (funcname == "ensure_value_type") {
+            std::string expression(context->nameAndArgs()[0]->args()->explist()->exp()[0]->getText());
             Var left = visit(context->nameAndArgs()[0]->args()->explist()->exp()[0]).as<Var>();
             Var middle = visit(context->nameAndArgs()[0]->args()->explist()->exp()[1]).as<Var>();
             Var right = visit(context->nameAndArgs()[0]->args()->explist()->exp()[2]).as<Var>();
-
-            std::string expression(context->nameAndArgs()[0]->args()->explist()->exp()[0]->getText());
 
             // Do not attempt to perform equality checks on reference types
             if (!middle.is_refcounted() && left != middle) {
@@ -1522,7 +1530,8 @@ public:
             }
 
             std::cout << "Expression " << expression << " has value " << left.value_as_string() << " of type " << left.type_as_string() << " (expected equivalent of " << middle.value_as_string() << " of type " << type << ") => OK" << std::endl;
-        } else {
+        } else if (funcname == "expect_failure") {
+            std::string expression(context->nameAndArgs()[0]->args()->explist()->exp()[0]->getText());
             try {
                 Var left = visit(context->nameAndArgs()[0]->args()->explist()->exp()[0]).as<Var>();
                 throw std::runtime_error("Failure expected in expression " + expression);
@@ -1530,6 +1539,34 @@ public:
                 std::cout << "Expression " << expression << " rightfully triggered a type error" << std::endl;
             } catch (std::exception& e) {
                 throw;
+            }
+        } else if (funcname == "print") {
+            Var left = visit(context->nameAndArgs()[0]->args()->explist()->exp()[0]).as<Var>();
+            std::cout << left.value_as_string() << std::endl;
+        } else if (funcname == "globals") {
+            std::cout << "Globals: " << std::endl;
+            for (ValueStore::value_type const& v: _global_values) {
+                std::cout << v.first << ": " << v.second.value_as_string() << std::endl;
+            }
+            std::cout << std::endl;
+        } else if (funcname == "locals") {
+            std::cout << "Locals (top block): " << std::endl;
+            for (ValueStore::value_type const& v: _local_values.back()) {
+                std::cout << v.first << ": " << v.second.value_as_string() << std::endl;
+            }
+            std::cout << std::endl;
+        } else if (funcname == "memory") {
+            std::cout << "Globals: " << std::endl;
+            for (ValueStore::value_type const& v: _global_values) {
+                std::cout << "\t" << v.first << ": " << v.second.value_as_string() << std::endl;
+            }
+            std::cout << std::endl;
+
+            for (int i = 0; i < _local_values.size(); ++i) {
+                std::cout << "Locals (block " << i << "): " << std::endl;
+                for (ValueStore::value_type const& v: _local_values[i]) {
+                    std::cout << "\t" << v.first << ": " << v.second.value_as_string() << std::endl;
+                }
             }
         }
 
