@@ -196,8 +196,8 @@ namespace Types {
         }
 
         int border() const;
-        Value subscript(Value const&);
-        Value dot(std::string const&);
+        Value& subscript(Value const&);
+        Value& dot(std::string const&);
 
     private:
         struct FieldSetter {
@@ -233,23 +233,23 @@ namespace Types {
         public:
             FieldGetter(Table& t) : _t(t) { }
 
-            Value operator()(Nil);
+            Value& operator()(Nil);
 
-            Value operator()(int i);
+            Value& operator()(int i);
 
-            Value operator()(double d);
+            Value& operator()(double d);
 
-            Value operator()(bool b);
+            Value& operator()(bool b);
 
-            Value operator()(std::string const& s);
+            Value& operator()(std::string const& s);
 
-            Value operator()(Function* f);
+            Value& operator()(Function* f);
 
-            Value operator()(Table* t);
+            Value& operator()(Table* t);
 
-            Value operator()(Userdata* u);
+            Value& operator()(Userdata* u);
 
-            Value operator()(Elipsis);
+            Value& operator()(Elipsis);
 
         private:
             Table& _t;
@@ -395,8 +395,8 @@ namespace Types {
         }
 
         friend Table::Table(const std::list<std::pair<Value, Value>>&);
-        friend Table::~Table();
-        friend Table::FieldSetter::~FieldSetter();
+        friend Value& Table::subscript(const Value &);
+        friend Value& Table::dot(const std::string &);
         friend MyLuaVisitor;
 
         bool operator==(const Value& other) const {
@@ -659,21 +659,21 @@ namespace Types {
             return result.str();
         }
 
-        Value subscript(Value const& value) {
+        Value& subscript(Value const& value) {
             if (is<Table*>()) {
                 return as<Table*>()->subscript(value);
             } else if (is<Userdata*>()) {
-                return make_nil();
+                return _nil;
             } else {
                 throw Exceptions::ContextlessBadTypeException("table or userdata", type_as_string());
             }
         }
 
-        Value dot(std::string const& name) {
+        Value& dot(std::string const& name) {
             if (is<Table*>()) {
                 return as<Table*>()->dot(name);
             } else if (is<Userdata*>()) {
-                return make_nil();
+                return _nil;
             } else {
                 throw Exceptions::ContextlessBadTypeException("table or userdata", type_as_string());
             }
@@ -731,16 +731,16 @@ namespace Types {
         }
     }
 
-    Value Table::subscript(Value const& value) {
-
+    Value& Table::subscript(Value const& value) {
+        return std::visit(Table::FieldGetter(*this), value._type);
     }
 
-    Value Table::dot(const std::string &name) {
+    Value& Table::dot(const std::string &name) {
         auto iter = _string_fields.find(name);
         if (iter != _string_fields.end()) {
             return iter->second;
         } else {
-            return Value::make_nil();
+            return Value::_nil;
         }
     }
 
@@ -772,22 +772,23 @@ namespace Types {
         _t._userdata_fields[u] = _value;
     }
 
-    Value Table::FieldGetter::operator()(int i) { return _t._int_fields[i]; }
+    Value& Table::FieldGetter::operator()(int i) { return _t._int_fields[i]; }
 
-    Value Table::FieldGetter::operator()(double d) { return _t._double_fields[d]; }
+    Value& Table::FieldGetter::operator()(double d) { return _t._double_fields[d]; }
 
-    Value Table::FieldGetter::operator()(bool b) { return _t._bool_fields[b]; }
+    Value& Table::FieldGetter::operator()(bool b) { return _t._bool_fields[b]; }
 
-    Value Table::FieldGetter::operator()(std::string const& s) { return _t._string_fields[s]; }
+    Value& Table::FieldGetter::operator()(std::string const& s) { return _t._string_fields[s]; }
 
-    Value Table::FieldGetter::operator()(Function* f) { return _t._function_fields[f]; }
+    Value& Table::FieldGetter::operator()(Function* f) { return _t._function_fields[f]; }
 
-    Value Table::FieldGetter::operator()(Table* t) { return _t._table_fields[t]; }
+    Value& Table::FieldGetter::operator()(Table* t) { return _t._table_fields[t]; }
 
-    Value Table::FieldGetter::operator()(Userdata* u) { return _t._userdata_fields[u]; }
+    Value& Table::FieldGetter::operator()(Userdata* u) { return _t._userdata_fields[u]; }
 
-    Value Table::FieldGetter::operator()(Nil) { throw std::runtime_error("No nil allowed in table"); }
-    Value Table::FieldGetter::operator()(Elipsis) { throw std::runtime_error("No elipsis allowed in table"); }
+    Value& Table::FieldGetter::operator()(Nil) { throw std::runtime_error("No nil allowed in table"); }
+
+    Value& Table::FieldGetter::operator()(Elipsis) { throw std::runtime_error("No elipsis allowed in table"); }
 }
 
 class MyLuaVisitor : public LuaVisitor {
@@ -867,7 +868,7 @@ public:
             throw std::runtime_error("Unknown statement");
         }
 
-        return Types::Value::make_nil();
+        return Var::make(Types::Value::make_nil());
     }
 
     virtual antlrcpp::Any visitAttnamelist(LuaParser::AttnamelistContext *context) {
@@ -881,14 +882,14 @@ public:
 
     virtual antlrcpp::Any visitAttrib(LuaParser::AttribContext *) {
         std::cerr << "Attributes are not supported" << std::endl;
-        return Types::Value::make_nil();
+        return Var::make(Types::Value::make_nil());
     }
 
     virtual antlrcpp::Any visitRetstat(LuaParser::RetstatContext *context) {
         if (LuaParser::ExplistContext* ctx = context->explist()) {
             return visit(ctx);
         } else {
-            return Types::Value::make_nil();
+            return Var::make(Types::Value::make_nil());
         }
     }
 
@@ -901,11 +902,13 @@ public:
     }
 
     virtual antlrcpp::Any visitVarlist(LuaParser::VarlistContext *context) {
+        _var__contex = Var_Context::VARLIST;
         std::vector<Var> vars;
         for (LuaParser::Var_Context* ctx: context->var_()) {
             vars.push_back(visit(ctx).as<Var>());
         }
 
+        _var__contex = Var_Context::OTHER;
         return vars;
     }
 
@@ -914,9 +917,9 @@ public:
     }
 
     virtual antlrcpp::Any visitExplist(LuaParser::ExplistContext *context) {
-        std::vector<Types::Value*> values;
+        std::vector<Var> values;
         for (LuaParser::ExpContext* ctx: context->exp()) {
-            values.push_back(visit(ctx).as<Types::Value*>());
+            values.push_back(visit(ctx).as<Var>());
         }
 
         return values;
@@ -924,13 +927,13 @@ public:
 
     virtual antlrcpp::Any visitExp(LuaParser::ExpContext *context) {
         if (context->getText() == "nil") {
-            return Types::Value::make_nil();
+            return Var::make(Types::Value::make_nil());
         } else if (context->getText() == "true") {
-            return Types::Value::make_true();
+            return Var::make(Types::Value::make_true());
         } else if (context->getText() == "false") {
-            return Types::Value::make_false();
+            return Var::make(Types::Value::make_false());
         } else if (context->getText() == "...") {
-            return Types::Value::make_elipsis();
+            return Var::make(Types::Value::make_elipsis());
         } else if (LuaParser::NumberContext* ctx = context->number()) {
             return visit(ctx);
         } else if (LuaParser::StringContext* ctx = context->string()) {
@@ -944,38 +947,38 @@ public:
         } else if (context->operatorPower()) {
             // Promote both operands (if int or string representing double) to
             // double for exponentiation.
-            Types::Value leftV = visit(context->exp()[0]).as<Types::Value>();
+            Var leftV = visit(context->exp()[0]).as<Var>();
             double left = leftV.as_double_weak();
 
-            Types::Value rightV = visit(context->exp()[1]).as<Types::Value>();
+            Var rightV = visit(context->exp()[1]).as<Var>();
             double right = rightV.as_double_weak();
 
-            return Types::Value::make_double(std::pow(left, right));
+            return Var::make(Types::Value::make_double(std::pow(left, right)));
         } else if (LuaParser::OperatorUnaryContext* ctx = context->operatorUnary()) {
-            Types::Value v = visit(context->exp()[0]).as<Types::Value>();
+            Var v = visit(context->exp()[0]).as<Var>();
             OperatorUnary op = visit(ctx).as<OperatorUnary>();
 
             switch (op) {
             case OperatorUnary::BANG:
                 if (v.is<std::string>()) {
-                    return Types::Value::make_int(v.as<std::string>().size());
+                    return Var::make(Types::Value::make_int(v.as<std::string>().size()));
                 } else {
-                    return Types::Value::make_int(v.as<Types::Table*>()->border());
+                    return Var::make(Types::Value::make_int(v.as<Types::Table*>()->border()));
                 }
 
             case OperatorUnary::BIN_NOT: {
-                 return Types::Value::make_int(~v.as_int_weak());
+                 return Var::make(Types::Value::make_int(~v.as_int_weak()));
             }
 
             case OperatorUnary::MINUS: {
-                std::function<Types::Value(Types::Value const&)> convert = [&](Types::Value const& value) -> Types::Value {
-                    Types::Value result;
+                std::function<Var(Var const&)> convert = [&](Var const& value) -> Var {
+                    Var result;
                     if (value.is<int>()) {
-                        result =  Types::Value::make_int(-value.as<int>());
+                        result = Var::make(Types::Value::make_int(-value.as<int>()));
                     } else if (value.is<double>()) {
-                        result = Types::Value::make_double(-value.as<double>());
+                        result = Var::make(Types::Value::make_double(-value.as<double>()));
                     } else {
-                        result = convert(value.from_string_to_number(true));
+                        result = convert(Var::make(value.from_string_to_number(true)));
                     }
 
                     return result;
@@ -985,17 +988,17 @@ public:
             }
 
             case OperatorUnary::NOT: {
-                return Types::Value::make_bool(!v.as_bool_weak());
+                return Var::make(Types::Value::make_bool(!v.as_bool_weak()));
             }
 
             default:
                 throw std::runtime_error("Invalid Unary operator");
             }
         } else if (LuaParser::OperatorMulDivModContext* ctx = context->operatorMulDivMod()) {
-            Types::Value leftV = visit(context->exp()[0]).as<Types::Value>();
-            Types::Value rightV = visit(context->exp()[1]).as<Types::Value>();
+            Var leftV = visit(context->exp()[0]).as<Var>();
+            Var rightV = visit(context->exp()[1]).as<Var>();
 
-            Types::Value result;
+            Var result;
 
             double left = leftV.as_double_weak();
             double right = rightV.as_double_weak();
@@ -1004,29 +1007,29 @@ public:
             switch (op) {
             case OperatorMulDivMod::MUL:
                 if (leftV.is<int>() && rightV.is<int>()) {
-                    result = Types::Value::make_int(leftV.as<int>() * rightV.as<int>());
+                    result = Var::make(Types::Value::make_int(leftV.as<int>() * rightV.as<int>()));
                 } else {
-                    result = Types::Value::make_double(left * right);
+                    result = Var::make(Types::Value::make_double(left * right));
                 }
                 break;
 
             case OperatorMulDivMod::DIV:
-                result = Types::Value::make_double(left / right);
+                result = Var::make(Types::Value::make_double(left / right));
                 break;
 
             case OperatorMulDivMod::MOD:
                 if (leftV.is<int>() && rightV.is<int>()) {
-                    result = Types::Value::make_int(leftV.as<int>() % rightV.as<int>());
+                    result = Var::make(Types::Value::make_int(leftV.as<int>() % rightV.as<int>()));
                 } else {
-                    result = Types::Value::make_double(std::remainder(left, right));
+                    result = Var::make(Types::Value::make_double(std::remainder(left, right)));
                 }
                 break;
 
             case OperatorMulDivMod::QUOT:
                 if (leftV.is<int>() && rightV.is<int>()) {
-                    result = Types::Value::make_int(std::floor(left / right));
+                    result = Var::make(Types::Value::make_int(std::floor(left / right)));
                 } else {
-                    result = Types::Value::make_double(std::floor(left / right));
+                    result = Var::make(Types::Value::make_double(std::floor(left / right)));
                 }
                 break;
 
@@ -1036,10 +1039,10 @@ public:
 
             return result;
         } else if (LuaParser::OperatorAddSubContext* ctx = context->operatorAddSub()) {
-            Types::Value leftV = visit(context->exp()[0]).as<Types::Value>();
-            Types::Value rightV = visit(context->exp()[1]).as<Types::Value>();
+            Var leftV = visit(context->exp()[0]).as<Var>();
+            Var rightV = visit(context->exp()[1]).as<Var>();
 
-            Types::Value result;
+            Var result;
 
             OperatorAddSub op = visit(ctx);
             if (leftV.is<int>() && rightV.is<int>()) {
@@ -1048,11 +1051,11 @@ public:
 
                 switch (op) {
                 case OperatorAddSub::ADD:
-                    result = Types::Value::make_int(left + right);
+                    result = Var::make(Types::Value::make_int(left + right));
                     break;
 
                 case OperatorAddSub::SUB:
-                    result = Types::Value::make_int(left - right);
+                    result = Var::make(Types::Value::make_int(left - right));
                     break;
 
                 default:
@@ -1064,11 +1067,11 @@ public:
 
                 switch (op) {
                 case OperatorAddSub::ADD:
-                    result = Types::Value::make_double(left + right);
+                    result = Var::make(Types::Value::make_double(left + right));
                     break;
 
                 case OperatorAddSub::SUB:
-                    result = Types::Value::make_double(left - right);
+                    result = Var::make(Types::Value::make_double(left - right));
                     break;
 
                 default:
@@ -1080,16 +1083,16 @@ public:
         } else if (context->operatorStrcat()) {
             // Promote numbers to strings if necessary.
             // Note that Lua allows two numbers to concatenate as a string.
-            Types::Value leftV = visit(context->exp()[0]).as<Types::Value>();
-            Types::Value rightV = visit(context->exp()[1]).as<Types::Value>();
+            Var leftV = visit(context->exp()[0]).as<Var>();
+            Var rightV = visit(context->exp()[1]).as<Var>();
 
             std::string left = leftV.as_string();
             std::string right = rightV.as_string();
 
-            return Types::Value::make_string(left + right);
+            return Var::make(Types::Value::make_string(left + right));
         } else if (LuaParser::OperatorComparisonContext* ctx = context->operatorComparison()) {
-            Types::Value leftV = visit(context->exp()[0]).as<Types::Value>();
-            Types::Value rightV = visit(context->exp()[1]).as<Types::Value>();
+            Var leftV = visit(context->exp()[0]).as<Var>();
+            Var rightV = visit(context->exp()[1]).as<Var>();
 
             double left = leftV.as_double_weak();
             double right = rightV.as_double_weak();
@@ -1126,11 +1129,11 @@ public:
                 throw std::runtime_error("Invalid Comparison operator");
             }
 
-            return Types::Value::make_bool(fn(left, right));
+            return Var::make(Types::Value::make_bool(fn(left, right)));
         } else if (context->operatorAnd()) {
-            Types::Value leftV = visit(context->exp()[0]).as<Types::Value>();
+            Var leftV = visit(context->exp()[0]).as<Var>();
             bool left = leftV.as_bool_weak();
-            Types::Value rightV = visit(context->exp()[1]).as<Types::Value>();
+            Var rightV = visit(context->exp()[1]).as<Var>();
             // bool right = rightV->as_bool_weak();
 
             // Decrease a single reference counter here because the value is
@@ -1141,8 +1144,8 @@ public:
                 return leftV; // false and nil == false, nil and false == nil
             }
         } else if (context->operatorOr()) {
-            Types::Value leftV = visit(context->exp()[0]).as<Types::Value>();
-            Types::Value rightV = visit(context->exp()[1]).as<Types::Value>();
+            Var leftV = visit(context->exp()[0]).as<Var>();
+            Var rightV = visit(context->exp()[1]).as<Var>();
 
             bool left = leftV.as_bool_weak();
             // bool right = rightV.as_bool_weak();
@@ -1155,34 +1158,34 @@ public:
         } else if (LuaParser::OperatorBitwiseContext* ctx = context->operatorBitwise()) {
             // Promote exact floats / strings representing exact floats to int
             // for bitwise operations.
-            Types::Value leftV = visit(context->exp()[0]).as<Types::Value>();
-            Types::Value rightV = visit(context->exp()[1]).as<Types::Value>();
+            Var leftV = visit(context->exp()[0]).as<Var>();
+            Var rightV = visit(context->exp()[1]).as<Var>();
 
             int left = leftV.as_int_weak();
             int right = rightV.as_int_weak();
 
-            Types::Value result;
+            Var result;
 
             OperatorBitwise op = visit(ctx).as<OperatorBitwise>();
             switch (op) {
             case OperatorBitwise::AND:
-                result = Types::Value::make_int(left & right);
+                result = Var::make(Types::Value::make_int(left & right));
                 break;
 
             case OperatorBitwise::LSHIFT:
-                result = Types::Value::make_int(left << right);
+                result = Var::make(Types::Value::make_int(left << right));
                 break;
 
             case OperatorBitwise::OR:
-                result = Types::Value::make_int(left | right);
+                result = Var::make(Types::Value::make_int(left | right));
                 break;
 
             case OperatorBitwise::RSHIFT:
-                result = Types::Value::make_int(left >> right);
+                result = Var::make(Types::Value::make_int(left >> right));
                 break;
 
             case OperatorBitwise::XOR:
-                result = Types::Value::make_int(left ^ right);
+                result = Var::make(Types::Value::make_int(left ^ right));
                 break;
 
             default:
@@ -1196,7 +1199,8 @@ public:
     }
 
     virtual antlrcpp::Any visitPrefixexp(LuaParser::PrefixexpContext *context) {
-        return nyi("Prefixexp");
+        Var val = visit(context->varOrExp()).as<Var>();
+        return val;
     }
 
     virtual antlrcpp::Any visitFunctioncall(LuaParser::FunctioncallContext *context) {
@@ -1214,9 +1218,9 @@ public:
         std::string expression(context->nameAndArgs()[0]->args()->explist()->exp()[0]->getText());
 
         if (funcname == "ensure_value_type") {
-            Types::Value left = visit(context->nameAndArgs()[0]->args()->explist()->exp()[0]).as<Types::Value>();
-            Types::Value middle = visit(context->nameAndArgs()[0]->args()->explist()->exp()[1]).as<Types::Value>();
-            Types::Value right = visit(context->nameAndArgs()[0]->args()->explist()->exp()[2]).as<Types::Value>();
+            Var left = visit(context->nameAndArgs()[0]->args()->explist()->exp()[0]).as<Var>();
+            Var middle = visit(context->nameAndArgs()[0]->args()->explist()->exp()[1]).as<Var>();
+            Var right = visit(context->nameAndArgs()[0]->args()->explist()->exp()[2]).as<Var>();
 
             std::string expression(context->nameAndArgs()[0]->args()->explist()->exp()[0]->getText());
 
@@ -1241,7 +1245,7 @@ public:
             std::cout << "Expression " << expression << " has value " << left.value_as_string() << " of type " << left.type_as_string() << " (expected equivalent of " << middle.value_as_string() << " of type " << type << ") => OK" << std::endl;
         } else {
             try {
-                Types::Value left = visit(context->nameAndArgs()[0]->args()->explist()->exp()[0]).as<Types::Value>();
+                Var left = visit(context->nameAndArgs()[0]->args()->explist()->exp()[0]).as<Var>();
                 throw std::runtime_error("Failure expected in expression " + expression);
             } catch (Exceptions::BadTypeException& e) {
                 std::cout << "Expression " << expression << " rightfully triggered a type error" << std::endl;
@@ -1250,44 +1254,56 @@ public:
             }
         }
 
-        return Types::Value::make_nil();
+        return Var::make(Types::Value::make_nil());
     }
 
     virtual antlrcpp::Any visitVarOrExp(LuaParser::VarOrExpContext *context) {
-        return nyi("VarOrExp");
+        Types::Value value;
+        if (context->var_()) {
+            // value =
+        }
     }
 
     virtual antlrcpp::Any visitVar_(LuaParser::Var_Context *context) {
         Var result;
+        Var suffix_start;
+        Var expr;
+
         if (context->NAME()) {
             if (context->varSuffix().size() == 0) {
-                result = context->NAME()->getText();
-            } else {
-                // std::cout << context->getText() << std::endl;
-                std::string name(context->NAME()->getText());
-                Types::Value access = *lookup_name(name);
-
-                for (LuaParser::VarSuffixContext* ctx: context->varSuffix()) {
-                    if (!access.has_dot()) {
-                        throw Exceptions::BadDotAccess(access.type_as_string());
+                if (_var__contex == Var_Context::VARLIST) {
+                    auto iter = _global_values.find(context->NAME()->getText());
+                    if (iter == _global_values.end()) {
+                        _global_values[context->NAME()->getText()] = Types::Value::_nil;
                     }
 
-                    Suffix suffix = visit(ctx).as<Suffix>();
-                    if (is_error(suffix)) {
-                        result = var_error_t;
-                        return result;
-                    } else if (Subscript* subscript = std::get_if<Subscript>(&suffix)) {
-                        access = access.subscript(subscript->value);
-                    } else {
-                        access = access.dot(std::get<std::string>(suffix));
-                    }
+                    result = Var::make(&(_global_values[context->NAME()->getText()]));
                 }
-                // std::cout << std::endl;
+            } else {
+                std::string name(context->NAME()->getText());
+                suffix_start = Var::make(lookup_name(name));
             }
         } else {
-
+            suffix_start = visit(context->exp()).as<Var>();
         }
 
+        for (LuaParser::VarSuffixContext* ctx: context->varSuffix()) {
+            if (!suffix_start.has_dot()) {
+                throw Exceptions::BadDotAccess(suffix_start.type_as_string());
+            }
+
+            Suffix suffix = visit(ctx).as<Suffix>();
+            if (is_error(suffix)) {
+                result = Var::make(var_error_t);
+                return result;
+            } else if (Subscript* subscript = std::get_if<Subscript>(&suffix)) {
+                suffix_start = Var::make(&(suffix_start.subscript(subscript->_value.get())));
+            } else {
+                suffix_start = Var::make(&(suffix_start.dot(std::get<std::string>(suffix))));
+            }
+        }
+
+        result = suffix_start;
         return result;
     }
 
@@ -1301,7 +1317,7 @@ public:
                 result = context->NAME()->getText();
             } else {
                 Subscript sub;
-                sub.value = visit(context->exp()).as<Types::Value>();
+                sub._value = visit(context->exp()).as<Var>();
                 result = sub;
             }
         }
@@ -1336,14 +1352,14 @@ public:
             values = visit(ctx).as<std::list<std::pair<Types::Value, Types::Value>>>();
         }
 
-        return Types::Value::make_table(values);
+        return Var::make(Types::Value::make_table(values));
     }
 
     virtual antlrcpp::Any visitFieldlist(LuaParser::FieldlistContext *context) {
         std::list<std::pair<Types::Value, Types::Value>> values;
         unsigned int index = 1;
         for (LuaParser::FieldContext* ctx: context->field()) {
-            std::pair<std::optional<Types::Value>, Types::Value> value = visit(ctx).as<std::pair<std::optional<Types::Value>, Types::Value>>();
+            std::pair<std::optional<Var>, Var> value = visit(ctx).as<std::pair<std::optional<Var>, Var>>();
             if (value.first && value.first->is<Types::Nil>()) {
                 continue;
             }
@@ -1357,9 +1373,9 @@ public:
                     continue;
                 }
                 Types::Value key = Types::Value::make_int(index++);
-                values.push_back(std::make_pair(key, value.second));
+                values.push_back(std::make_pair(key, value.second.get()));
             } else {
-                values.push_back(std::make_pair(*value.first, value.second));
+                values.push_back(std::make_pair(value.first->get(), value.second.get()));
             }
         }
 
@@ -1371,12 +1387,11 @@ public:
 
         if (text.starts_with("[")) {
             std::cout << "[NYI] Expressions as keys" << std::endl;
-            return std::make_pair(std::make_optional(Types::Value::make_nil()), Types::Value::make_nil());
+            return std::make_pair(std::make_optional(Var::make(Types::Value::make_nil())), Var::make(Types::Value::make_nil()));
         } else if (context->NAME()) {
-            std::cout << "[NYI] Names as keys" << std::endl;
-            return std::make_pair(std::make_optional(Types::Value::make_nil()), Types::Value::make_nil());
+            return std::make_pair(std::make_optional(Var::make(Types::Value::make_string(context->NAME()->getText()))), visit(context->exp()[0]).as<Var>());
         } else {
-            return std::make_pair((std::optional<Types::Value>)std::nullopt, visit(context->exp()[0]).as<Types::Value>());
+            return std::make_pair((std::optional<Var>)std::nullopt, visit(context->exp()[0]).as<Var>());
         }
     }
 
@@ -1484,14 +1499,14 @@ public:
 
     virtual antlrcpp::Any visitNumber(LuaParser::NumberContext *context) {
         if (auto ptr = context->INT()) {
-            return Types::Value::make_int(std::stoi(ptr->getText()));
+            return Var::make(Types::Value::make_int(std::stoi(ptr->getText())));
         } else if (auto ptr = context->HEX()) {
-            return Types::Value::make_int(std::stoi(ptr->getText(), nullptr, 16));
+            return Var::make(Types::Value::make_int(std::stoi(ptr->getText(), nullptr, 16)));
         } else if (auto ptr = context->FLOAT()) {
-            return Types::Value::make_double(std::stod(ptr->getText()));
+            return Var::make(Types::Value::make_double(std::stod(ptr->getText())));
         } else if (auto ptr = context->HEX_FLOAT()) {
             std::cout << "[NYI] Hexfloat" << std::endl;
-            return Types::Value::make_double(std::stod(ptr->getText()));
+            return Var::make(Types::Value::make_double(std::stod(ptr->getText())));
         } else {
             throw std::runtime_error("Invalid number");
         }
@@ -1500,13 +1515,13 @@ public:
     virtual antlrcpp::Any visitString(LuaParser::StringContext *context) {
         if (auto ptr = context->NORMALSTRING()) {
             std::string text(ptr->getText());
-            return Types::Value::make_string(text.substr(1, text.size() - 2));
+            return Var::make(Types::Value::make_string(text.substr(1, text.size() - 2)));
         } else if (auto ptr = context->CHARSTRING()) {
             std::string text(ptr->getText());
-            return Types::Value::make_string(text.substr(1, text.size() - 2));
+            return Var::make(Types::Value::make_string(text.substr(1, text.size() - 2)));
         } else if (auto ptr = context->LONGSTRING()) {
             std::cout << "[NYI] Longstring" << std::endl;
-            return Types::Value::make_string(ptr->getText());
+            return Var::make(Types::Value::make_string(ptr->getText()));
         } else {
             throw std::runtime_error("Invalid string");
         }
@@ -1554,15 +1569,260 @@ private:
         ERROR
     };
 
+    enum class Var_Context {
+        VARLIST,
+        OTHER
+    };
+
+    Var_Context _var__contex = Var_Context::OTHER;
 
     class VarError {};
     VarError var_error_t;
 
-    struct Subscript {
-        Types::Value value;
+    /* A free value (rvalue); a bound value (lvalue); an error */
+    typedef std::variant<Types::Value, Types::Value*, VarError> VarElements;
+    struct Var {
+    public:
+        template<typename T>
+        T as() const {
+            if  (rvalue()) {
+                return _rvalue().as<T>();
+            } else if  (lvalue()) {
+                return _lvalue()->as<T>();
+            } else {
+                _error();
+            }
+        }
+
+        Types::Value get() {
+            if (lvalue()) {
+                return *_lvalue();
+            } else if (rvalue()) {
+                return _rvalue();
+            } else {
+                _error();
+            }
+        }
+
+        constexpr Types::Value* _lvalue() const {
+            return std::get<Types::Value*>(_value);
+        }
+
+        constexpr Types::Value const& _rvalue() const {
+            return std::get<Types::Value>(_value);
+        }
+
+        constexpr Types::Value* _lvalue() {
+            return std::get<Types::Value*>(_value);
+        }
+
+        constexpr Types::Value& _rvalue() {
+            return std::get<Types::Value>(_value);
+        }
+
+        constexpr bool lvalue() const {
+            return std::holds_alternative<Types::Value*>(_value);
+        }
+
+        constexpr bool rvalue() const {
+            return std::holds_alternative<Types::Value>(_value);
+        }
+
+        template<typename T>
+        void set(T&& t) {
+            _value = std::move(t);
+        }
+
+         bool error() const {
+            return std::holds_alternative<VarError>(_value);
+        }
+
+        template<typename T>
+        static Var make(T&& value) {
+            Var v;
+            v._value = std::move(value);
+            return v;
+        }
+
+        double as_double_weak() const {
+            if  (rvalue()) {
+                return _rvalue().as_double_weak();
+            } else if  (lvalue()) {
+                return _lvalue()->as_double_weak();
+            } else {
+                _error();
+            }
+        }
+
+        int as_int_weak(bool allow_double = true) const {
+            if  (rvalue()) {
+                return _rvalue().as_int_weak(allow_double);
+            } else if  (lvalue()) {
+                return _lvalue()->as_int_weak(allow_double);
+            } else {
+                _error();
+            }
+        }
+
+        bool as_bool_weak() const {
+            if  (rvalue()) {
+                return _rvalue().as_bool_weak();
+            } else if  (lvalue()) {
+                return _lvalue()->as_bool_weak();
+            } else {
+                _error();
+            }
+        }
+
+        std::string as_string() const {
+            if  (rvalue()) {
+                return _rvalue().as_string();
+            } else if  (lvalue()) {
+                return _lvalue()->as_string();
+            } else {
+                _error();
+            }
+        }
+
+        Var() { }
+
+        Var(Var const& other) {
+            *this = other;
+        }
+
+        Var& operator=(Var const& other) {
+            if (other.rvalue()) {
+                _value = other._rvalue();
+            } else if (other.lvalue()) {
+                _value = other._lvalue();
+            } else {
+                _error();
+            }
+
+            return *this;
+        }
+
+        bool operator==(const Var& other) const {
+            if  (!((lvalue() && other.lvalue()) ||
+                  (rvalue() && other.rvalue())))
+                return false;
+
+            if  (lvalue()) {
+                return *_lvalue() == *other._lvalue();
+            } else if  (rvalue()) {
+                return _rvalue() == other._rvalue();
+            } else {
+                _error();
+            }
+        }
+
+        bool operator!=(const Var& other) const {
+            return !(*this == other);
+        }
+
+        bool has_dot() const {
+            if  (lvalue()) {
+                return _lvalue()->has_dot();
+            } else if  (rvalue()) {
+                return _rvalue().has_dot();
+            } else {
+                _error();
+            }
+        }
+
+        template<typename T>
+        bool is() const {
+            if  (lvalue()) {
+                return _lvalue()->is<T>();
+            } else if  (rvalue()) {
+                return _rvalue().is<T>();
+            } else {
+                _error();
+            }
+        }
+
+        bool is_refcounted() const {
+            if  (lvalue()) {
+                return _lvalue()->is_refcounted();
+            } else if (rvalue()) {
+                return _rvalue().is_refcounted();
+            } else {
+                _error();
+            }
+        }
+
+        Types::Value from_string_to_number(bool force_double = false) const {
+            if  (lvalue()) {
+                return _lvalue()->from_string_to_number(force_double);
+            } else if  (rvalue()) {
+                return _rvalue().from_string_to_number(force_double);
+            } else {
+                _error();
+            }
+        }
+
+        std::string type_as_string() const {
+            if  (lvalue()) {
+                return _lvalue()->type_as_string();
+            } else if  (rvalue()) {
+                return _rvalue().type_as_string();
+            } else {
+                _error();
+            }
+        }
+
+        std::string value_as_string() const {
+            if  (lvalue()) {
+                return _lvalue()->value_as_string();
+            } else if  (rvalue()) {
+                return _rvalue().value_as_string();
+            } else {
+                _error();
+            }
+        }
+
+        Types::Value& subscript(Types::Value const& value) {
+            if  (lvalue()) {
+                return _lvalue()->subscript(value);
+            } else if  (rvalue()) {
+                return _rvalue().subscript(value);
+            } else {
+                _error();
+            }
+        }
+
+        Types::Value& dot(std::string const& s) {
+            if  (lvalue()) {
+                return _lvalue()->dot(s);
+            } else if  (rvalue()) {
+                return _rvalue().dot(s);
+            } else {
+                _error();
+            }
+        }
+
+        Types::LuaValue& value() {
+            if  (lvalue()) {
+                return _lvalue()->value();
+            } else if  (rvalue()) {
+                return _rvalue().value();
+            } else {
+                _error();
+            }
+        }
+
+    private:
+        VarElements _value;
+
+        [[noreturn]] void _error() const {
+            throw std::runtime_error("Attempted to access an errored value");
+        }
     };
 
-    typedef std::variant<std::string, Types::Value*, VarError> Var;
+    struct Subscript {
+        Var _value;
+    };
+
     typedef std::variant<Subscript, std::string, VarError> Suffix;
 
     template<typename... Args>
@@ -1572,17 +1832,14 @@ private:
 
     void process_stat_var_list(LuaParser::VarlistContext* varlist, LuaParser::ExplistContext* explist) {
         std::vector<Var> vars = visit(varlist).as<std::vector<Var>>();
-        std::vector<Types::Value> exprs = visit(explist).as<std::vector<Types::Value>>();
+        std::vector<Var> exprs = visit(explist).as<std::vector<Var>>();
 
         for (int i = 0; i < vars.size(); ++i) {
-            if (std::holds_alternative<std::string>(vars[i])) {
-                _global_values[std::get<std::string>(vars[i])] = exprs[i];
-            } else if (std::holds_alternative<Types::Value*>(vars[i])) {
-                Types::Value* v = std::get<Types::Value*>(vars[i]);
-                *v = exprs[i];
-            } else {
-                continue;
+            if (!vars[i].lvalue()) {
+                throw std::runtime_error("How the hell did you arrive here ?");
             }
+
+            vars[i] = exprs[i];
         }
     }
 
@@ -1645,12 +1902,12 @@ private:
 
     }
 
-    Types::Value nyi(std::string const& str) {
+    Var nyi(std::string const& str) {
         std::cout << "[NYI] " << str << std::endl;
-        return Types::Value::make_nil();
+        return Var::make(Types::Value::make_nil());
     }
 
-    std::optional<Types::Value> lookup_name(std::string const& name, bool should_throw = true) {
+    Types::Value* lookup_name(std::string const& name, bool should_throw = true) {
         auto local_iter = _local_values.top().find(name);
         if (local_iter == _local_values.top().end()) {
             auto global_iter = _global_values.find(name);
@@ -1658,13 +1915,13 @@ private:
                 if (should_throw) {
                     throw Exceptions::NilDot();
                 } else {
-                    return std::nullopt;
+                    return &Types::Value::_nil;
                 }
             } else {
-                return std::make_optional(global_iter->second);
+                return &(global_iter->second);
             }
         } else {
-            return std::make_optional(local_iter->second);
+            return &(local_iter->second);
         }
     }
 
