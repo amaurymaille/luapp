@@ -15,11 +15,16 @@
 #include "antlr4-runtime.h"
 #include "Token.h"
 
+#include <boost/program_options.hpp>
+
 #include "LuaLexer.h"
+#include "LuaBaseListener.h"
 #include "LuaParser.h"
 #include "LuaVisitor.h"
 
 namespace fs = std::filesystem;
+namespace po = boost::program_options;
+
 class MyLuaVisitor;
 
 namespace Exceptions {
@@ -122,6 +127,33 @@ namespace Exceptions {
             return _error.c_str();
         }
 
+    private:
+        std::string _error;
+    };
+
+    class CrossedLocal : public std::exception {
+    public:
+        CrossedLocal(std::string const& label, std::string const& local) {
+            _error = "goto " + label + " crosses initialization of local " + local + "\n";
+        }
+
+        const char* what() const noexcept {
+            return _error.c_str();
+        }
+
+    private:
+        std::string _error;
+    };
+
+    class InvisibleLabel : public std::exception {
+    public:
+        InvisibleLabel(std::string const& label) {
+            _error = "Label "+ label + " is not visible\n";
+        }
+
+        const char* what() const noexcept {
+            return _error.c_str();
+        }
     private:
         std::string _error;
     };
@@ -791,10 +823,255 @@ namespace Types {
     Value& Table::FieldGetter::operator()(Elipsis) { throw std::runtime_error("No elipsis allowed in table"); }
 }
 
+/* Helper class used to detect whether goto statements are legit or not.
+ * Gotos are lexically scoped but can't cross functions bodies: you can jump
+ * to any label that has been defined in a surrounding block, but you can't
+ * escape from the boundary of the function you are (maybe in).
+ * Additionnaly, gotos cannot cross the declaration of a local variable.
+ */
+class GotoListener : public LuaBaseListener {
+public:
+    GotoListener() {
+        _current_context = nullptr;
+    }
+
+    void enterChunk(LuaParser::ChunkContext *ctx) {
+        _root_context = ctx->block();
+        _scopes.push_back(Scope());
+        _stack_scopes.push(&_scopes.back());
+        _current_scope = &_scopes.back();
+    }
+
+    void enterBlock(LuaParser::BlockContext *ctx) {
+        // std::cout << ctx->getText() << std::endl;
+        _blocks.push(ctx);
+
+        if (_current_context) {
+            _current_scope->_scope_elements[_current_context].push_back(make_element(ctx));
+            _parents[ctx] = _current_context;
+        } else {
+            // std::cout << "No context" << std::endl;
+        }
+
+        _current_context = _blocks.top();
+    }
+
+    void exitBlock(LuaParser::BlockContext *ctx) {
+        if (_blocks.top() != ctx) {
+            throw std::runtime_error("Unbalanced blocks");
+        }
+
+        _blocks.pop();
+        if (_blocks.empty()) {
+            _current_context = nullptr;
+        } else {
+            _current_context = _blocks.top();
+        }
+    }
+
+    void enterStat(LuaParser::StatContext *ctx) {
+        if (!ctx->getText().starts_with("local") &&
+                !ctx->getText().starts_with("function") &&
+                !ctx->getText().starts_with(("local function")) &&
+                !ctx->getText().starts_with(("goto"))) {
+            return;
+        }
+
+        // Goto
+        if (ctx->getText().starts_with("goto")) {
+            std::string label(ctx->NAME()->toString());
+            _current_scope->_scope_elements[_current_context].push_back(make_element(Goto(std::move(label))));
+            // Declaration of local variables (including local functions)
+        } else if (ctx->getText().starts_with("local")) {
+            if (ctx->funcbody()) {
+                _current_scope->_scope_elements[_current_context].push_back(make_element(Local(ctx->NAME()->getText())));
+                // _current_context = nullptr;
+            } else {
+                LuaParser::AttnamelistContext* lst = ctx->attnamelist();
+                for (auto name: lst->NAME()) {
+                    _current_scope->_scope_elements[_current_context].push_back(make_element(Local(name->getText())));
+                }
+            }
+            // Definition of a function
+        } else {
+            _current_scope->_scope_elements[_current_context].push_back(make_element(Local(ctx->funcname()->getText())));
+            // _current_context = nullptr;
+        }
+    }
+
+    // Beginning of the scope of an inner function
+    void enterFunctiondef(LuaParser::FunctiondefContext *) {
+        _scopes.push_back(Scope());
+        _current_scope = &_scopes.back();
+        _stack_scopes.push(&_scopes.back());
+        _current_context = nullptr;
+    }
+
+    // End of the scope of an inner function
+    void exitFunctiondef(LuaParser::FunctiondefContext *) {
+        _stack_scopes.pop();
+        if (_stack_scopes.empty()) {
+            _current_scope = nullptr;
+        } else {
+            _current_scope = _stack_scopes.top();
+        }
+    }
+
+    void enterLabel(LuaParser::LabelContext *ctx) {
+        _current_scope->_scope_elements[_current_context].push_back(make_element(Label(ctx->NAME()->getText())));
+    }
+
+    void validate() const {
+        for (const Scope& scope: _scopes) {
+            LuaParser::BlockContext* ctx = root_context(scope);
+            if (ctx == nullptr) {
+                ctx = _root_context;
+            }
+
+            if (ctx == nullptr) {
+                std::cout << "No context found..." << std::endl;
+                return;
+            }
+            std::vector<std::string> seen_labels;
+            std::vector<std::pair<std::vector<ScopeElement>::const_iterator, std::vector<ScopeElement>::const_iterator>> previous;
+            explore_context(scope, ctx, seen_labels, previous);
+        }
+    }
+
+private:
+    struct Goto {
+        std::string _label;
+        Goto(std::string&& label) : _label(std::move(label)) { }
+    };
+
+    struct Label {
+        std::string _name;
+        Label(std::string&& name) : _name(std::move(name)) { }
+    };
+
+    struct Local {
+        std::string _name;
+        Local(std::string&& name) : _name(std::move(name)) { }
+    };
+
+    typedef std::variant<Goto, Label, Local, LuaParser::BlockContext*> ScopeElement;
+
+    template<typename T>
+    ScopeElement make_element(T&& t) {
+        ScopeElement e(std::move(t));
+        return e;
+    }
+
+    /* A scope is the "smallest" block that can be gotoed. For example, the
+     * global scope is its own Scope, because no function can goto into the
+     * global scope, you can only goto the global scope from the global scope.
+     * Conversely, every function defines a new Scope.
+     *
+     * A Scope can hold several blocks. Each block is defined as per the Lua
+     * grammar. You can goto into any block that is on the same level as you
+     * , or above, but you can't goto into a block that is below you. You can
+     * goto outside of an if block, but you can't goto into an if block.
+     */
+    struct Scope {
+        std::map<LuaParser::BlockContext*, std::vector<ScopeElement>> _scope_elements;
+    };
+
+    void explore_context(Scope const& scope,
+                         LuaParser::BlockContext* const ctx,
+                         std::vector<std::string> const& previous_labels,
+                         std::vector<std::pair<std::vector<ScopeElement>::const_iterator, std::vector<ScopeElement>::const_iterator>> const& previous) const {
+        std::vector<std::string> labels(previous_labels);
+        std::vector<std::pair<std::vector<ScopeElement>::const_iterator, std::vector<ScopeElement>::const_iterator>> iters(previous);
+
+        auto scope_element_iter_because_const = scope._scope_elements.find(ctx);
+        auto vec = scope_element_iter_because_const->second;
+        for (auto iter = vec.cbegin(); iter != vec.cend(); ++iter) {
+            ScopeElement const& element = *iter;
+            if (const Goto* stmt = std::get_if<Goto>(&element)) {
+                if (std::find(labels.begin(), labels.end(), stmt->_label) != labels.end()) {
+                    // std::cout << "Label " << stmt->_label << " was already seen, everything okay" << std::endl;
+                    continue;
+                } else {
+                    // std::cout << "Label " << stmt->_label << " not yet seen, looking forward" << std::endl;
+                    iters.push_back(std::make_pair(iter, vec.cend()));
+                    validate_goto(iters, stmt->_label);
+                    iters.pop_back();
+                }
+            } else if (const Label* label = std::get_if<Label>(&element)) {
+                labels.push_back(label->_name);
+            } else if (LuaParser::BlockContext* const* cctx = std::get_if<LuaParser::BlockContext*>(&element)) {
+                iters.push_back(std::make_pair(iter, vec.cend()));
+                explore_context(scope, *cctx, labels, iters);
+                iters.pop_back();
+            }
+        }
+    }
+
+    void validate_goto(std::vector<std::pair<std::vector<ScopeElement>::const_iterator, std::vector<ScopeElement>::const_iterator>> const& previous,
+                       std::string const& search) const {
+        bool found = false;
+        // std::string suspected_local;
+        for (auto iter = previous.rbegin(); iter != previous.rend(); ++iter) {
+            auto elements_iter = iter->first;
+            auto end_iter = iter->second;
+
+            if (found) {
+                break;
+            }
+
+            for (; elements_iter != end_iter; ++elements_iter) {
+                ScopeElement const& element = *elements_iter;
+                if (const Local* local = std::get_if<Local>(&element)) {
+                    auto copy = iter;
+                    ++copy;
+                    if (copy == previous.rend()) {
+                        throw Exceptions::CrossedLocal(search, local->_name);
+                    } else {
+                        break;
+                    }
+                } else if (const Label* label = std::get_if<Label>(&element)) {
+                    if (label->_name == search) {
+                        found = true;
+                        break;
+                    }
+                }
+            }
+        }
+
+        if (!found) {
+            throw Exceptions::InvisibleLabel(search);
+        }
+    }
+
+    LuaParser::BlockContext* root_context(Scope const& scope) const {
+        auto begin = scope._scope_elements.begin();
+        auto iter = _parents.find(begin->first);
+        auto copy = iter;
+
+        while (iter != _parents.end()) {
+            copy = iter;
+            iter = _parents.find(iter->second);
+        }
+
+        return copy->second;
+    }
+
+    std::map<LuaParser::BlockContext*, LuaParser::BlockContext*> _parents;
+    LuaParser::BlockContext* _current_context;
+    LuaParser::BlockContext* _root_context;
+    std::stack<LuaParser::BlockContext*> _blocks;
+    std::list<Scope> _scopes;
+    std::stack<Scope*> _stack_scopes;
+    Scope* _current_scope;
+};
+
+
 class MyLuaVisitor : public LuaVisitor {
 public:
-    MyLuaVisitor() {
-
+    MyLuaVisitor(antlr4::tree::ParseTree* tree) {
+        GotoListener listener;
+        antlr4::tree::ParseTreeWalker::DEFAULT.walk(&listener, tree);
+        listener.validate();
     }
 
     ~MyLuaVisitor() {
@@ -2033,8 +2310,8 @@ private:
     std::string _error;
 };
 
-void run_test(fs::path const& path) {
-    std::ifstream stream(path.string(), std::ios::in);
+void run_test(std::string const& path) {
+    std::ifstream stream(path, std::ios::in);
 
     if (!stream) {
         return;
@@ -2054,17 +2331,17 @@ void run_test(fs::path const& path) {
     antlr4::CommonTokenStream tokens(&lexer);
     LuaParser parser(&tokens);
     if (parser.getNumberOfSyntaxErrors()) {
-        throw std::runtime_error("Errors encountered while processing file " + path.string() + "\n");
+        throw std::runtime_error("Errors encountered while processing file " + path + "\n");
     }
 
     antlr4::tree::ParseTree* tree = parser.chunk();
-    MyLuaVisitor visitor;
     try {
+        MyLuaVisitor visitor(tree);
         visitor.visit(tree);
         std::cout << "[OK] " << path << std::endl;
     } catch (std::exception& e) {
         std::ostringstream stream;
-        stream << "Caught unexpected exception while processing file: " << path.string() <<
+        stream << "Caught unexpected exception while processing file: " << path <<
                   std::endl << "What: " << e.what() << std::endl;
         throw std::runtime_error(stream.str());
     }
@@ -2077,7 +2354,114 @@ void tests() {
             continue;
         }
 
-        run_test(p.path());
+        auto v = (p.path() | std::views::reverse).begin();
+        ++v;
+
+        if (*v == "00_goto")
+            continue;
+        run_test(p.path().string());
+    }
+}
+
+class GotoResultExpected : public std::exception {
+public:
+    GotoResultExpected(const std::string& path, const std::string& expected, const std::string& received) {
+        _error = "Goto result of kind " + expected + " was expected in file + " + path + ", received " + received + "\n";
+    }
+
+    const char* what() const noexcept {
+        return _error.c_str();
+    }
+
+private:
+    std::string _error;
+};
+
+void run_goto_test(std::string const& path) {
+    std::ifstream stream(path, std::ios::in);
+
+    if (!stream) {
+        return;
+    }
+
+    std::string header;
+    stream >> header;
+
+    antlr4::ANTLRInputStream input(stream);
+    LuaLexer lexer(&input);
+    antlr4::CommonTokenStream tokens(&lexer);
+    LuaParser parser(&tokens);
+    if (parser.getNumberOfSyntaxErrors()) {
+        throw std::runtime_error("Errors encountered while processing file " + path + "\n");
+    }
+
+    antlr4::tree::ParseTree* tree = parser.chunk();
+    try {
+        GotoListener listener;
+        antlr4::tree::ParseTreeWalker::DEFAULT.walk(&listener, tree);
+        listener.validate();
+
+        if (header != "success") {
+            throw GotoResultExpected(path, header, "success");
+        }
+    } catch (Exceptions::CrossedLocal& crossed) {
+        if (header != "crossed") {
+            throw GotoResultExpected(path, header, "crossed");
+        }
+    } catch (Exceptions::InvisibleLabel& invisible) {
+        if (header != "invisible") {
+            throw GotoResultExpected(path, header, "invisible");
+        }
+    } catch (std::exception& e) {
+        std::cerr << e.what() << std::endl;
+        throw;
+    }
+}
+
+void test_goto() {
+    for (auto& p: fs::directory_iterator("tests/00_goto")) {
+        if (p.path().string()[0] == '.' || p.path().extension() != ".lua") {
+            continue;
+        }
+
+        run_goto_test(p.path().string());
+    }
+}
+
+struct CLIArgs {
+    bool _test = false;
+    bool _base = false;
+    bool _goto = false;
+};
+
+void parse_args(int argc, char** argv, CLIArgs& args) {
+    po::options_description options("All options");
+    options.add_options()
+            ("help", "Display this help and exit")
+            ("test", "Run tests")
+            ("base", "Run the base file to get the AST")
+            ("goto", "Run tests on the goto directory with listener only");
+    po::variables_map vm;
+    po::command_line_parser parser(argc, argv);
+    parser.options(options);
+    po::store(parser.run(), vm);
+    po::notify(vm);
+
+    if (vm.count("help")) {
+        std::cout << options << std::endl;
+        std::exit(0);
+    }
+
+    if (vm.count("test")) {
+        args._test = true;
+    }
+
+    if (vm.count("base")) {
+        args._base = true;
+    }
+
+    if (vm.count("goto")) {
+        args._goto = true;
     }
 }
 
@@ -2087,21 +2471,35 @@ int main(int argc, char** argv) {
     make_test_data<false, void>("parse_test3.lua")->run(); */
     Types::Value::init();
 
-    std::ifstream stream("parse_base.lua");
-    antlr4::ANTLRInputStream input(stream);
-    LuaLexer lexer(&input);
-    antlr4::CommonTokenStream tokens(&lexer);
-    LuaParser parser(&tokens);
-    if (parser.getNumberOfSyntaxErrors()) {
-        throw std::runtime_error("Errors encountered while processing file parse_base.lua \n");
+    CLIArgs args;
+    parse_args(argc, argv, args);
+
+    if (args._base) {
+        std::ifstream stream("parse_base.lua");
+        antlr4::ANTLRInputStream input(stream);
+        LuaLexer lexer(&input);
+        antlr4::CommonTokenStream tokens(&lexer);
+        LuaParser parser(&tokens);
+        if (parser.getNumberOfSyntaxErrors()) {
+            throw std::runtime_error("Errors encountered while processing file parse_base.lua \n");
+        }
+
+        antlr4::tree::ParseTree* tree = parser.chunk();
+        std::cout << tree->toStringTree(&parser, true) << std::endl;
+
+        try {
+            MyLuaVisitor visitor(tree);
+            visitor.visit(tree);
+        } catch (std::exception& e) {
+            std::cerr << "Parse base error: " << e.what() << std::endl;
+        }
     }
 
-    antlr4::tree::ParseTree* tree = parser.chunk();
-    std::cout << tree->toStringTree(&parser, true) << std::endl;
-    MyLuaVisitor visitor;
-    try { visitor.visit(tree); } catch (std::exception& e) { std::cerr << "Parse base error: " << e.what() << std::endl; }
+    if (args._goto) {
+        test_goto();
+    }
 
-    if (argc == 2 && !strcmp(argv[1], "--test")) {
+    if (args._test) {
         tests();
     }
 
