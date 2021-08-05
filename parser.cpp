@@ -1087,7 +1087,7 @@ public:
 
     virtual antlrcpp::Any visitBlock(LuaParser::BlockContext *context) {
         // std::cout << "Block: " << context->getText() << std::endl;
-        _local_values.push(ValueStore());
+        _local_values.push_back(ValueStore());
         antlrcpp::Any retval = Types::Value::make_nil();
 
         for (LuaParser::StatContext* ctx: context->stat()) {
@@ -1102,7 +1102,7 @@ public:
             value->remove_reference();
         } */
 
-        _local_values.pop();
+        _local_values.pop_back();
 
         return retval;
     }
@@ -1537,10 +1537,14 @@ public:
     }
 
     virtual antlrcpp::Any visitVarOrExp(LuaParser::VarOrExpContext *context) {
-        Types::Value value;
+        Var result;
         if (context->var_()) {
-            // value =
+            result = visit(context->var_()).as<Var>();
+        } else if (context->exp()) {
+            result = visit(context->exp()).as<Var>();
         }
+
+        return result;
     }
 
     virtual antlrcpp::Any visitVar_(LuaParser::Var_Context *context) {
@@ -1549,18 +1553,24 @@ public:
         Var expr;
 
         if (context->NAME()) {
+            std::string name(context->NAME()->getText());
             if (context->varSuffix().size() == 0) {
                 if (_var__contex == Var_Context::VARLIST) {
-                    auto iter = _global_values.find(context->NAME()->getText());
-                    if (iter == _global_values.end()) {
-                        _global_values[context->NAME()->getText()] = Types::Value::_nil;
+                    std::pair<Types::Value*, Scope> value = lookup_name(name, false);
+                    if (!value.first) {
+                        _global_values[name] = Types::Value::_nil;
+                        result = Var::make(&(_global_values[name]));
+                    } else {
+                        result = Var::make(value.first);
                     }
-
-                    result = Var::make(&(_global_values[context->NAME()->getText()]));
+                } else {
+                    // result = Var::make(&(_global_values[context->NAME()->getText()]));
+                    result = Var::make(lookup_name(name).first);
                 }
+
+                return result;
             } else {
-                std::string name(context->NAME()->getText());
-                suffix_start = Var::make(lookup_name(name));
+                suffix_start = Var::make(lookup_name(name).first);
             }
         } else {
             suffix_start = visit(context->exp()).as<Var>();
@@ -1853,6 +1863,13 @@ private:
         OTHER
     };
 
+    enum class Scope {
+        GLOBAL, // In the global scope (not local)
+        LOCAL, // In the current block
+        DEPENDANT // Context dependant, for example in a previous block in the
+                  // same lexical scope
+    };
+
     Var_Context _var__contex = Var_Context::OTHER;
 
     class VarError {};
@@ -1873,7 +1890,7 @@ private:
             }
         }
 
-        Types::Value get() {
+        Types::Value get() const {
             if (lvalue()) {
                 return *_lvalue();
             } else if (rvalue()) {
@@ -1905,6 +1922,14 @@ private:
 
         constexpr bool rvalue() const {
             return std::holds_alternative<Types::Value>(_value);
+        }
+
+        void morph() {
+            if (!lvalue()) {
+                throw std::runtime_error("Cannot morph a Var that doesn't hold an lvalue");
+            }
+
+            _value = *_lvalue();
         }
 
         template<typename T>
@@ -1970,10 +1995,10 @@ private:
         }
 
         Var& operator=(Var const& other) {
-            if (other.rvalue()) {
-                _value = other._rvalue();
-            } else if (other.lvalue()) {
+            if (other.lvalue()) {
                 _value = other._lvalue();
+            } else if (other.rvalue()) {
+                _value = other.get();
             } else {
                 _error();
             }
@@ -1982,7 +2007,7 @@ private:
         }
 
         bool operator==(const Var& other) const {
-            if  (!((lvalue() && other.lvalue()) ||
+            /* if  (!((lvalue() && other.lvalue()) ||
                   (rvalue() && other.rvalue())))
                 return false;
 
@@ -1992,7 +2017,8 @@ private:
                 return _rvalue() == other._rvalue();
             } else {
                 _error();
-            }
+            } */
+            return get() == other.get();
         }
 
         bool operator!=(const Var& other) const {
@@ -2113,12 +2139,20 @@ private:
         std::vector<Var> vars = visit(varlist).as<std::vector<Var>>();
         std::vector<Var> exprs = visit(explist).as<std::vector<Var>>();
 
+        for (Var& v: std::views::filter(exprs, [](Var const& v) { return v.lvalue(); })) {
+            v.morph();
+        }
+
         for (int i = 0; i < vars.size(); ++i) {
             if (!vars[i].lvalue()) {
                 throw std::runtime_error("How the hell did you arrive here ?");
             }
 
-            vars[i] = exprs[i];
+            if (i >= exprs.size()) {
+                vars[i]._lvalue()->value() = Types::Nil();
+                continue;
+            }
+            vars[i]._lvalue()->value() = exprs[i].get().value();
         }
     }
 
@@ -2156,12 +2190,12 @@ private:
 
     void process_local_variables(LuaParser::AttnamelistContext* al, LuaParser::ExplistContext* el) {
         std::vector<std::string> names = visit(al).as<std::vector<std::string>>();
-        std::vector<Types::Value> values;
+        std::vector<Var> values;
 
         if (el) {
-             values = visit(el).as<std::vector<Types::Value>>();
+             values = visit(el).as<std::vector<Var>>();
         } else {
-            values.resize(names.size(), Types::Value::make_nil());
+            values.resize(names.size(), Var::make(Types::Value::make_nil()));
         }
 
         auto names_iter = names.begin();
@@ -2173,7 +2207,13 @@ private:
                 throw Exceptions::NameAlreadyUsedException(*names_iter);
             } */
 
-            _local_values.top()[*names_iter] = *values_iter;
+            _local_values.back()[*names_iter] = values_iter->get();
+        }
+
+        if (names_iter != names.end()) {
+            for (; names_iter != names.end(); ++names_iter) {
+                _local_values.back()[*names_iter] = Types::Value::_nil;
+            }
         }
     }
 
@@ -2186,21 +2226,21 @@ private:
         return Var::make(Types::Value::make_nil());
     }
 
-    Types::Value* lookup_name(std::string const& name, bool should_throw = true) {
-        auto local_iter = _local_values.top().find(name);
-        if (local_iter == _local_values.top().end()) {
+    std::pair<Types::Value*, Scope> lookup_name(std::string const& name, bool should_throw = true) {
+        auto local_iter = _local_values.back().find(name);
+        if (local_iter == _local_values.back().end()) {
             auto global_iter = _global_values.find(name);
             if (global_iter == _global_values.end()) {
                 if (should_throw) {
                     throw Exceptions::NilDot();
                 } else {
-                    return &Types::Value::_nil;
+                    return std::make_pair(nullptr, Scope::GLOBAL);
                 }
             } else {
-                return &(global_iter->second);
+                return std::make_pair(&(global_iter->second), Scope::GLOBAL);
             }
         } else {
-            return &(local_iter->second);
+            return std::make_pair(&(local_iter->second), Scope::LOCAL);
         }
     }
 
