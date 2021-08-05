@@ -2287,91 +2287,9 @@ private:
     // entered, push a new map on top of the stack to store the local
     // Values of the scope. Once the scope is exited, pop this map from
     // the stack.
-    std::stack<ValueStore> _local_values;
+    std::vector<ValueStore> _local_values;
     ValueStore _global_values;
 };
-
-/* template<typename Expected>
-void test_expect_failure(std::string const& file) {
-    std::ifstream stream(file);
-    antlr4::ANTLRInputStream input(stream);
-    LuaLexer lexer(&input);
-    antlr4::CommonTokenStream tokens(&lexer);
-    LuaParser parser(&tokens);
-
-    antlr4::tree::ParseTree* tree = parser.chunk();
-    MyLuaVisitor visitor;
-
-    try {
-        visitor.visit(tree);
-        std::cerr << tree->toStringTree(&parser, true) << std::endl;
-        std::cerr << "Execution expected failure" << std::endl;
-        std::terminate();
-    } catch (Expected const& e) {
-        std::cout << "Rightfully caught exception: " << e.what() << std::endl;
-    } catch (std::exception const& e) {
-        std::cerr << tree->toStringTree(&parser, true) << std::endl;
-        std::cerr << e.what() << std::endl;
-        std::terminate();
-    }
-}
-
-void test_expect_success(std::string const& file) {
-    std::ifstream stream(file);
-    antlr4::ANTLRInputStream input(stream);
-    LuaLexer lexer(&input);
-    antlr4::CommonTokenStream tokens(&lexer);
-    LuaParser parser(&tokens);
-
-    antlr4::tree::ParseTree* tree = parser.chunk();
-    MyLuaVisitor visitor;
-    try {
-        visitor.visit(tree);
-        std::cout << "Execution successfully completed" << std::endl;
-    } catch (std::exception const& e) {
-        std::cerr << "Unexpected error" << std::endl;
-        std::cerr << tree->toStringTree(&parser, true) << std::endl;
-        std::cerr << e.what() << std::endl;
-        std::terminate();
-    }
-}
-
-class AbstractTestData {
-public:
-    AbstractTestData(std::string const& filename) : _filename(filename) { }
-
-    void run() {
-        _run_fn();
-    }
-
-protected:
-    std::string _filename;
-    std::function<void()> _run_fn;
-};
-
-template<bool Fail, typename T>
-struct TestData : public AbstractTestData {
-    TestData(std::string const& filename) : AbstractTestData(filename) {
-        _run_fn = std::bind_front(&TestData::run, this);
-    }
-
-    void run() {
-        if constexpr (Fail) {
-            test_expect_failure<T>(_filename);
-        } else {
-            test_expect_success(_filename);
-        }
-    }
-};
-
-template<bool Fail, typename Exception>
-AbstractTestData* make_test_data(std::string const& filename) {
-    if constexpr (Fail) {
-        return new TestData<Fail, Exception>(filename);
-    } else {
-        return new TestData<Fail, void>(filename);
-    }
-} */
 
 class FailureExpected : public std::exception {
 public:
