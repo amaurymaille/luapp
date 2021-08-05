@@ -455,6 +455,8 @@ namespace Types {
                     return *as<Userdata*>() == *other.as<Userdata*>();
                 } else if (is<Function*>()) {
                     return *as<Function*>() == *other.as<Function*>();
+                } else {
+                    throw std::runtime_error("Bad Value type " + type_as_string());
                 }
             } else {
                 // Equality between ints and doubles is allowed.
@@ -677,11 +679,11 @@ namespace Types {
             } else if (is<std::string>()) {
                 result << as<std::string>();
             } else if (is<Function*>()) {
-                result << as<Function*>();
+                result << "function: " << as<Function*>();
             } else if (is<Userdata*>()) {
-                result << as<Userdata*>();
+                result << "userdata: " << as<Userdata*>();
             } else if (is<Table*>()) {
-                result << as<Table*>();
+                result << "table: " << as<Table*>();
             } else if (is<bool>()) {
                 result << std::boolalpha << as<bool>() << std::noboolalpha;
             } else {
