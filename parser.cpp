@@ -193,6 +193,13 @@ namespace Exceptions {
     private:
         std::string _error;
     };
+
+    class Break : public std::exception {
+    public:
+        Break() { }
+
+        const char* what() const noexcept { return ""; }
+    };
 }
 
 namespace Types {
@@ -861,6 +868,20 @@ namespace Types {
     Value& Table::FieldGetter::operator()(Elipsis) { throw std::runtime_error("No elipsis allowed in table"); }
 }
 
+namespace Exceptions {
+    class Return : public std::exception {
+    public:
+        Return(Types::Value const& value) : _value(value) { }
+
+        Types::Value const& get() const { return _value; }
+
+        const char* what() const noexcept { return ""; }
+
+    private:
+        Types::Value const& _value;
+    };
+}
+
 /* Helper class used to detect whether goto statements are legit or not.
  * Gotos are lexically scoped but can't cross functions bodies: you can jump
  * to any label that has been defined in a surrounding block, but you can't
@@ -1144,7 +1165,11 @@ public:
 
     virtual antlrcpp::Any visitChunk(LuaParser::ChunkContext *context) {
         // std::cout << "Chunk: " << context->getText() << std::endl;
-        return visit(context->block());
+        try {
+            return visit(context->block());
+        } catch (Exceptions::Return& ret) {
+            return Var::make(ret.get());
+        }
     }
 
     virtual antlrcpp::Any visitBlock(LuaParser::BlockContext *context) {
@@ -1157,7 +1182,7 @@ public:
         }
 
         if (LuaParser::RetstatContext* ctx = context->retstat()) {
-            retval = visit(ctx);
+            return visit(ctx); // [[noreturn]]
         }
 
         /* for (auto& value: std::views::values(_local_values.top())) {
@@ -1174,7 +1199,7 @@ public:
         if (context->getText() == ";") {
             ;
         } else if (context->getText() == "break") {
-            process_break();
+            throw Exceptions::Break();
         } else if (context->getText().starts_with("goto")) {
             process_goto(context->label());
         } else if (context->getText().starts_with("do")) {
@@ -1227,11 +1252,14 @@ public:
     }
 
     virtual antlrcpp::Any visitRetstat(LuaParser::RetstatContext *context) {
+        Var retval;
         if (LuaParser::ExplistContext* ctx = context->explist()) {
-            return visit(ctx);
+            retval = visit(ctx);
         } else {
-            return Var::make(Types::Value::make_nil());
+            retval = Var::make(Types::Value::make_nil());
         }
+
+        throw Exceptions::Return(retval.get());
     }
 
     virtual antlrcpp::Any visitLabel(LuaParser::LabelContext *context) {
@@ -2264,11 +2292,19 @@ private:
     }
 
     void process_while(LuaParser::ExpContext* exp, LuaParser::BlockContext* block) {
+        try {
 
+        } catch (Exceptions::Break& brk) {
+
+        }
     }
 
     void process_repeat(LuaParser::BlockContext* block, LuaParser::ExpContext* exp) {
+        try {
 
+        } catch (Exceptions::Break& brk) {
+
+        }
     }
 
     void process_if(LuaParser::StatContext* ctx) {
@@ -2276,11 +2312,19 @@ private:
     }
 
     void process_for_in(LuaParser::NamelistContext* nl, LuaParser::ExplistContext* el, LuaParser::BlockContext* block) {
+        try {
 
+        } catch (Exceptions::Break& brk) {
+
+        }
     }
 
     void process_for_loop(LuaParser::StatContext* ctx) {
+        try {
 
+        } catch (Exceptions::Break& brk) {
+
+        }
     }
 
     void process_function(LuaParser::FuncnameContext* name, LuaParser::FuncbodyContext* body) {
