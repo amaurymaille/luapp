@@ -2386,6 +2386,10 @@ void run_goto_test(std::string const& path) {
     std::string header;
     stream >> header;
 
+    if (header != "success" && header != "crossed" && header != "invisible") {
+        throw std::runtime_error("Unknown goto result " + header);
+    }
+
     antlr4::ANTLRInputStream input(stream);
     LuaLexer lexer(&input);
     antlr4::CommonTokenStream tokens(&lexer);
@@ -2415,6 +2419,8 @@ void run_goto_test(std::string const& path) {
         std::cerr << e.what() << std::endl;
         throw;
     }
+
+    std::cout << "[OK] " << path << std::endl;
 }
 
 void test_goto() {
@@ -2429,17 +2435,19 @@ void test_goto() {
 
 struct CLIArgs {
     bool _test = false;
+    std::string _test_file;
     bool _base = false;
     bool _goto = false;
+    std::string _goto_file;
 };
 
 void parse_args(int argc, char** argv, CLIArgs& args) {
     po::options_description options("All options");
     options.add_options()
             ("help", "Display this help and exit")
-            ("test", "Run tests")
+            ("test", po::value<std::string>()->implicit_value(""), "Run all tests, or on the given file only")
             ("base", "Run the base file to get the AST")
-            ("goto", "Run tests on the goto directory with listener only");
+            ("goto", po::value<std::string>()->implicit_value(""), "Run tests on the goto directory with listener only, or only on the given file");
     po::variables_map vm;
     po::command_line_parser parser(argc, argv);
     parser.options(options);
@@ -2453,6 +2461,7 @@ void parse_args(int argc, char** argv, CLIArgs& args) {
 
     if (vm.count("test")) {
         args._test = true;
+        args._test_file = vm["test"].as<std::string>();
     }
 
     if (vm.count("base")) {
@@ -2461,6 +2470,7 @@ void parse_args(int argc, char** argv, CLIArgs& args) {
 
     if (vm.count("goto")) {
         args._goto = true;
+        args._goto_file = vm["goto"].as<std::string>();
     }
 }
 
@@ -2495,11 +2505,19 @@ int main(int argc, char** argv) {
     }
 
     if (args._goto) {
-        test_goto();
+        if (!args._goto_file.empty()) {
+            run_goto_test(args._goto_file);
+        } else {
+            test_goto();
+        }
     }
 
     if (args._test) {
-        tests();
+        if (!args._test_file.empty()) {
+            run_test(args._test_file);
+        } else {
+            tests();
+        }
     }
 
     return 0;
