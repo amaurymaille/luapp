@@ -1170,6 +1170,9 @@ namespace Exceptions {
  */
 class GotoBreakListener : public LuaBaseListener {
 public:
+    typedef std::multimap<std::string, LuaParser::BlockContext*> BlocksPerLocal;
+
+public:
     GotoBreakListener() {
         _current_context = nullptr;
     }
@@ -1197,6 +1200,25 @@ public:
         _current_scope->_scope_elements[ctx];
 
         _current_context = _blocks.top();
+
+        // Force an empty vector for this context if it has not locals.
+        if (_blocks_relations.empty()) {
+            _locals_per_block[ctx];
+        } else {
+            // Any block has access to all the locals of its parent blocks.
+            // Special care required for for loops because they don't use local
+            // to start declare their variables, and they declare them outside of
+            // the block where they are visible.
+            if (_locals_per_block.find(ctx) != _locals_per_block.end()) { // for
+                auto& source = _locals_per_block[_blocks_relations.back()];
+                for (auto& p: source) {
+                    _locals_per_block[ctx].insert(std::make_pair(p.first, p.second));
+                }
+            } else {
+                _locals_per_block[ctx] = _locals_per_block[_blocks_relations.back()];
+            }
+        }
+        _blocks_relations.push_back(ctx);
     }
 
     void exitBlock(LuaParser::BlockContext *ctx) {
@@ -1212,6 +1234,8 @@ public:
         }
 
         _loop_blocks.erase(ctx);
+
+        _blocks_relations.pop_back();
     }
 
     void enterStat(LuaParser::StatContext *ctx) {
@@ -1240,6 +1264,7 @@ public:
                 LuaParser::AttnamelistContext* lst = ctx->attnamelist();
                 for (auto name: lst->NAME()) {
                     _current_scope->_scope_elements[_current_context].push_back(make_element(Local(name->getText())));
+                    _locals_per_block[_blocks_relations.back()].insert(std::make_pair(name->getText(), _blocks_relations.back()));
                 }
             }
             // Definition of a function
@@ -1250,6 +1275,16 @@ public:
             _label_to_context[ctx->label()->NAME()->getText()].push_back(_current_context);
         } else if (ctx->getText().starts_with("for")) {
             _loop_blocks.insert(ctx->block()[0]);
+            if (ctx->explist()) {
+                LuaParser::NamelistContext* nl = ctx->namelist();
+                std::vector<antlr4::tree::TerminalNode*> nodes(nl->NAME());
+                auto v = std::views::transform(nodes, [](antlr4::tree::TerminalNode* t) { return t->getText(); });
+                for (std::string const& name: v) {
+                    _locals_per_block[ctx->block()[0]].insert(std::make_pair(name, ctx->block()[0]));
+                }
+            } else {
+                _locals_per_block[ctx->block()[0]].insert(std::make_pair(ctx->NAME()->getText(), ctx->block()[0]));
+            }
         } else if (ctx->getText().starts_with("while")) {
             _loop_blocks.insert(ctx->block()[0]);
         } else if (ctx->getText().starts_with("repeat")) {
@@ -1285,7 +1320,7 @@ public:
         _current_scope->_scope_elements[_current_context].push_back(make_element(Label(ctx->NAME()->getText())));
     }
 
-    void validate() const {
+    void validate_gotos() const {
         std::set<LuaParser::BlockContext*> seen_contexts;
 
         for (const Scope& scope: _scopes) {
@@ -1305,6 +1340,10 @@ public:
         } else {
             return std::find(iter->second.begin(), iter->second.end(), ctx) != iter->second.end();
         }
+    }
+
+    std::pair<BlocksPerLocal::iterator, BlocksPerLocal::iterator> get_context_for_local(LuaParser::BlockContext const* ctx, std::string const& name) {
+        return _locals_per_block[const_cast<LuaParser::BlockContext*>(ctx)].equal_range(name);
     }
 
 private:
@@ -1434,13 +1473,29 @@ private:
         }
     }
 
+    /// Used to check whether gotos are legit or not.
     LuaParser::BlockContext* _current_context;
     std::stack<LuaParser::BlockContext*> _blocks;
     std::list<Scope> _scopes;
     std::stack<Scope*> _stack_scopes;
     Scope* _current_scope;
+
+    /// Used to check whether break statements are legit. A break cannot occur
+    /// when this is empty.
     std::set<LuaParser::BlockContext*> _loop_blocks;
+
+    /// Used in interpretation of gotos statement, allow a block to know whether
+    /// it is associated with a label or not. A block is associated with a label
+    /// if jumping to this label ends in this block.
     std::map<std::string, std::vector<LuaParser::BlockContext*>> _label_to_context;
+
+    /// Used to know which block has access to which locals and in which block.
+    /// The vector is used to handle cases where a block redefines an already
+    /// existing local: accessing this local before redefining it requires access
+    /// to the version found in an older context, while accessing it after having
+    /// redefined it will fetch its value from the current context.
+    std::map<LuaParser::BlockContext*, BlocksPerLocal> _locals_per_block;
+    std::vector<LuaParser::BlockContext*> _blocks_relations;
 };
 
 
@@ -1448,7 +1503,7 @@ class MyLuaVisitor : public LuaVisitor {
 public:
     MyLuaVisitor(antlr4::tree::ParseTree* tree) {
         antlr4::tree::ParseTreeWalker::DEFAULT.walk(&_listener, tree);
-        _listener.validate();
+        _listener.validate_gotos();
     }
 
     ~MyLuaVisitor() {
@@ -1466,17 +1521,28 @@ public:
 
     virtual antlrcpp::Any visitBlock(LuaParser::BlockContext *context) {
         // std::cout << "Block: " << context->getText() << std::endl;
-        _local_values.push_back(ValueStore());
+        bool coming_from_for = _coming_from_for;
+
+        if (_coming_from_for) {
+            _coming_from_for = false;
+        }
+
+        if (!coming_from_for) {
+            _blocks.push_back(context);
+        }
+        // Generate an empty map for this block locals.
         antlrcpp::Any retval = Types::Value::make_nil();
 
         // std::cout << context->getText() << std::endl;
-        for (int i = 0; i < context->stat().size(); ) {
+        for (unsigned int i = 0; i < context->stat().size(); ) {
             LuaParser::StatContext* ctx = context->stat(i);
-            // std::cout << ctx->getText() << std::endl;
+
             try {
                 visit(ctx);
                 ++i;
             } catch (Exceptions::Goto& g) {
+                stabilize_blocks(context);
+
                 if (_listener.is_associated_with_label(context, g.get())) {
                     ++i; // Move to next statement
                     while (i < context->stat().size()) {
@@ -1502,7 +1568,17 @@ public:
             value->remove_reference();
         } */
 
-        _local_values.pop_back();
+        if (!coming_from_for) {
+            _local_values.erase(context);
+        }
+
+        if (_blocks.back() != context) {
+            throw std::runtime_error("Unbalanced blocks");
+        }
+
+        if (!coming_from_for) {
+            _blocks.pop_back();
+        }
 
         return retval;
     }
@@ -1577,8 +1653,8 @@ public:
         throw Exceptions::Return(retval);
     }
 
-    virtual antlrcpp::Any visitLabel(LuaParser::LabelContext *context) {
-        return nyi("Label");
+    virtual antlrcpp::Any visitLabel(LuaParser::LabelContext *) {
+        return Types::Var::make(Types::Value::make_nil());
     }
 
     virtual antlrcpp::Any visitFuncname(LuaParser::FuncnameContext *context) {
@@ -1597,7 +1673,12 @@ public:
     }
 
     virtual antlrcpp::Any visitNamelist(LuaParser::NamelistContext *context) {
-        return nyi("Namelist");
+        std::vector<antlr4::tree::TerminalNode*> names(context->NAME());
+        std::vector<std::string> retval;
+
+        std::transform(names.begin(), names.end(), std::back_inserter(retval), [](antlr4::tree::TerminalNode* node) { return node->getText(); });
+
+        return retval;
     }
 
     virtual antlrcpp::Any visitExplist(LuaParser::ExplistContext *context) {
@@ -1956,7 +2037,7 @@ public:
             std::cout << std::endl;
         } else if (funcname == "locals") {
             std::cout << "Locals (top block): " << std::endl;
-            for (ValueStore::value_type const& v: _local_values.back()) {
+            for (ValueStore::value_type const& v: _local_values[current_block()]) {
                 std::cout << v.first << ": " << v.second.value_as_string() << std::endl;
             }
             std::cout << std::endl;
@@ -1967,9 +2048,9 @@ public:
             }
             std::cout << std::endl;
 
-            for (int i = 0; i < _local_values.size(); ++i) {
+            for (unsigned int i = 0; i < _blocks.size(); ++i) {
                 std::cout << "Locals (block " << i << "): " << std::endl;
-                for (ValueStore::value_type const& v: _local_values[i]) {
+                for (ValueStore::value_type const& v: _local_values[_blocks[i]]) {
                     std::cout << "\t" << v.first << ": " << v.second.value_as_string() << std::endl;
                 }
             }
@@ -2333,7 +2414,7 @@ private:
             v.morph();
         }
 
-        for (int i = 0; i < vars.size(); ++i) {
+        for (unsigned int i = 0; i < vars.size(); ++i) {
             if (!vars[i].lvalue()) {
                 throw std::runtime_error("How the hell did you arrive here ?");
             }
@@ -2355,44 +2436,32 @@ private:
     }
 
     void process_while(LuaParser::ExpContext* exp, LuaParser::BlockContext* block) {
-        int stack_size = _local_values.size();
-
+        LuaParser::BlockContext* current = current_block();
         try {
             while (visit(exp).as<Types::Var>().as_bool_weak()) {
                 visit(block);
             }
         } catch (Exceptions::Break& brk) {
-
+            stabilize_blocks(current);
         }
-
-        if (_local_values.size() < stack_size) {
-            throw Exceptions::StackCorruption(stack_size, _local_values.size());
-        }
-        _local_values.resize(stack_size);
     }
 
     void process_repeat(LuaParser::BlockContext* block, LuaParser::ExpContext* exp) {
-        int stack_size = _local_values.size();
-
+        LuaParser::BlockContext* current = current_block();
         try {
             do {
                 visit(block);
             } while (!visit(exp).as<Types::Var>().as_bool_weak());
         } catch (Exceptions::Break& brk) {
-
+            stabilize_blocks(current);
         }
-
-        if (_local_values.size() < stack_size) {
-            throw Exceptions::StackCorruption(stack_size, _local_values.size());
-        }
-        _local_values.resize(stack_size);
     }
 
     void process_if(LuaParser::StatContext* ctx) {
         std::vector<LuaParser::ExpContext*> conditions = ctx->exp();
 
         bool found = false;
-        for (int i = 0; i < conditions.size(); ++i) {
+        for (unsigned int i = 0; i < conditions.size(); ++i) {
             if (visit(conditions[i]).as<Types::Var>().as_bool_weak()) {
                 visit(ctx->block()[i]);
                 found = true;
@@ -2409,10 +2478,6 @@ private:
     }
 
     void process_for_in(LuaParser::NamelistContext* nl, LuaParser::ExplistContext* el, LuaParser::BlockContext* block) {
-        int stack_size = _local_values.size();
-
-        _local_values.push_back(ValueStore());
-
         std::vector<std::string> names = visit(nl).as<std::vector<std::string>>();
         std::vector<Types::Var> exprs = visit(el).as<std::vector<Types::Var>>();
 
@@ -2421,17 +2486,10 @@ private:
         } catch (Exceptions::Break& brk) {
 
         }
-
-        if (_local_values.size() < stack_size) {
-            throw Exceptions::StackCorruption(stack_size, _local_values.size());
-        }
-        _local_values.resize(stack_size);
     }
 
     void process_for_loop(LuaParser::StatContext* ctx) {
-        int stack_size = _local_values.size();
-        _local_values.push_back(ValueStore());
-
+        LuaParser::BlockContext* current = current_block();
         try {
             Types::Value counter = visit(ctx->exp()[0]).as<Types::Var>().get();
             if (!(counter.is<double>() || counter.is<int>())) {
@@ -2443,8 +2501,8 @@ private:
                 throw Exceptions::BadTypeException("int or double", limit.type_as_string(), "limit of numeric for");
             }
 
-            _local_values.back()[ctx->NAME()->getText()] = counter;
-            Types::Value& value = _local_values.back()[ctx->NAME()->getText()];
+            _local_values[ctx->block(0)][ctx->NAME()->getText()] = counter;
+            Types::Value& value = _local_values[ctx->block(0)][ctx->NAME()->getText()];
 
             Types::Value increment;
             if (ctx->exp().size() == 3) {
@@ -2458,28 +2516,29 @@ private:
             }
 
             if (increment.is<double>()) {
-                if (counter.is<int>()) {
-                    counter.value() = (double)counter.as<int>();
+                if (value.is<int>()) {
+                    value.value() = (double)value.as<int>();
                 }
             }
 
-            if (counter.is<int>()) {
-                for (; counter.as<int>() <= limit.as_double_weak(); counter.value() = counter.as<int>() + increment.as_double_weak()) {
+            _blocks.push_back(ctx->block(0));
+            if (value.is<int>()) {
+                for (; value.as<int>() <= limit.as_double_weak(); value.value() = value.as<int>() + (int)increment.as_double_weak()) {
+                    _coming_from_for = true;
                     visit(ctx->block()[0]);
                 }
             } else {
-                for (; counter.as<double>() <= limit.as_double_weak(); counter.value() = counter.as<double>() + increment.as_double_weak()) {
+                for (; value.as<double>() <= limit.as_double_weak(); value.value() = value.as<double>() + increment.as_double_weak()) {
+                    _coming_from_for = true;
                     visit(ctx->block()[0]);
                 }
             }
+            _blocks.pop_back();
+            _local_values.erase(ctx->block(0));
+
         } catch (Exceptions::Break& brk) {
-
+            stabilize_blocks(current);
         }
-
-        if (_local_values.size() < stack_size) {
-            throw Exceptions::StackCorruption(stack_size, _local_values.size());
-        }
-        _local_values.resize(stack_size);
     }
 
     void process_function(LuaParser::FuncnameContext* name, LuaParser::FuncbodyContext* body) {
@@ -2505,12 +2564,12 @@ private:
                 throw Exceptions::NameAlreadyUsedException(*names_iter);
             } */
 
-            _local_values.back()[*names_iter] = values_iter->get();
+            _local_values[current_block()][*names_iter] = values_iter->get();
         }
 
         if (names_iter != names.end()) {
             for (; names_iter != names.end(); ++names_iter) {
-                _local_values.back()[*names_iter] = Types::Value::_nil;
+                _local_values[current_block()][*names_iter] = Types::Value::_nil;
             }
         }
     }
@@ -2525,7 +2584,7 @@ private:
     }
 
     std::pair<Types::Value*, Scope> lookup_name(std::string const& name, bool should_throw = true) {
-        auto local_iter = _local_values.back().find(name);
+        /*auto local_iter = _local_values.back().find(name);
         if (local_iter == _local_values.back().end()) {
             auto global_iter = _global_values.find(name);
             if (global_iter == _global_values.end()) {
@@ -2539,6 +2598,61 @@ private:
             }
         } else {
             return std::make_pair(&(local_iter->second), Scope::LOCAL);
+        } */
+        Scope scope;
+
+        auto range = _listener.get_context_for_local(current_block(), name);
+        Types::Value* candidate;
+        bool found = false;
+        for (auto it = range.first; it != range.second; ++it) {
+            LuaParser::BlockContext* ctx = it->second;
+            auto value_it = _local_values[ctx].find(name);
+            if (value_it != _local_values[ctx].end()) {
+                candidate = &(value_it->second);
+                scope = Scope::LOCAL;
+                found = true;
+            }
+        }
+
+        if (!found) {
+            scope = Scope::GLOBAL;
+            auto it = _global_values.find(name);
+            if (it == _global_values.end()) {
+                if (should_throw) {
+                    throw Exceptions::NilDot();
+                }
+                candidate = nullptr;
+            } else {
+                candidate = &(_global_values[name]);
+            }
+        }
+
+        return std::make_pair(candidate, scope);
+    }
+
+    LuaParser::BlockContext* current_block() {
+        if (_blocks.empty()) {
+            return nullptr;
+        } else {
+            return _blocks.back();
+        }
+    }
+
+    void stabilize_blocks(LuaParser::BlockContext* context) {
+        if (_blocks.back() != context) {
+            size_t n = _blocks.size() - 1;
+            while (_blocks[n] != context) {
+                --n;
+            }
+
+            for (unsigned int j = n; j < _blocks.size(); ++j) {
+                _local_values.erase(_blocks[j]);
+            }
+
+            _blocks.resize(n + 1);
+            if (_blocks.back() != context) {
+                throw std::runtime_error("Oups");
+            }
         }
     }
 
@@ -2548,10 +2662,13 @@ private:
     // entered, push a new map on top of the stack to store the local
     // Values of the scope. Once the scope is exited, pop this map from
     // the stack.
-    std::vector<ValueStore> _local_values;
+    std::map<LuaParser::BlockContext*, ValueStore> _local_values;
     ValueStore _global_values;
 
     GotoBreakListener _listener;
+
+    std::vector<LuaParser::BlockContext*> _blocks;
+    bool _coming_from_for = false;
 };
 
 class FailureExpected : public std::exception {
@@ -2671,7 +2788,7 @@ void run_goto_break_test(std::string const& path) {
     try {
         GotoBreakListener listener;
         antlr4::tree::ParseTreeWalker::DEFAULT.walk(&listener, tree);
-        listener.validate();
+        listener.validate_gotos();
 
         if (header != "success") {
             throw GotoBreakResultExpected(path, header, "success");
