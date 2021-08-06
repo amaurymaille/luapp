@@ -849,6 +849,10 @@ public:
         _stack_scopes.push(&_scopes.back());
         _current_scope = &_scopes.back();
         _current_scope->_root_context = ctx->block();
+        /* Mandatory in order for the pointer to appear in the map, otherwise
+         * the program would crash during validation because the context would
+         * not be found.
+         */
         _current_scope->_scope_elements[ctx->block()];
     }
 
