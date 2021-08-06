@@ -2501,8 +2501,9 @@ private:
                 throw Exceptions::BadTypeException("int or double", limit.type_as_string(), "limit of numeric for");
             }
 
-            _local_values[ctx->block(0)][ctx->NAME()->getText()] = counter;
-            Types::Value& value = _local_values[ctx->block(0)][ctx->NAME()->getText()];
+            std::string name(ctx->NAME()->getText());
+            _local_values[ctx->block(0)][name] = counter;
+            Types::Value& value = _local_values[ctx->block(0)][name];
 
             Types::Value increment;
             if (ctx->exp().size() == 3) {
@@ -2519,18 +2520,48 @@ private:
                 if (value.is<int>()) {
                     value.value() = (double)value.as<int>();
                 }
+
+                if (counter.is<int>()) {
+                    counter.value() = (double)counter.as<int>();
+                }
             }
 
             _blocks.push_back(ctx->block(0));
             if (value.is<int>()) {
-                for (; value.as<int>() <= limit.as_double_weak(); value.value() = value.as<int>() + (int)increment.as_double_weak()) {
+                for (; value.as<int>() <= limit.as_double_weak();
+                     value.value() = counter.as<int>() + (int)increment.as_double_weak(),
+                     counter.value() = counter.as<int>() + (int)increment.as_double_weak()) {
                     _coming_from_for = true;
                     visit(ctx->block()[0]);
+                    // We must erase all references to previous local variables,
+                    // because they do keep their values between iterations.
+                    // However, we must keep the value of the counter because
+                    // it does retain its value between iterations. Well...
+                    // Not exactly, its value does get "reset", but we do not
+                    // remove it from the map because it is easier this way.
+                    auto iter = _local_values[ctx->block(0)].begin();
+                    while (iter != _local_values[ctx->block(0)].end()) {
+                        if (iter->first == name) {
+                            ++iter;
+                        } else {
+                            iter = _local_values[ctx->block(0)].erase(iter);
+                        }
+                    }
                 }
             } else {
-                for (; value.as<double>() <= limit.as_double_weak(); value.value() = value.as<double>() + increment.as_double_weak()) {
+                for (; value.as<double>() <= limit.as_double_weak();
+                     value.value() = counter.as<double>() + increment.as_double_weak(),
+                     counter.value() = counter.as<double>() + increment.as_double_weak()) {
                     _coming_from_for = true;
                     visit(ctx->block()[0]);
+                    auto iter = _local_values[ctx->block(0)].begin();
+                    while (iter != _local_values[ctx->block(0)].end()) {
+                        if (iter->first == name) {
+                            ++iter;
+                        } else {
+                            iter = _local_values[ctx->block(0)].erase(iter);
+                        }
+                    }
                 }
             }
             _blocks.pop_back();
