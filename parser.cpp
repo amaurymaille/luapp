@@ -862,7 +862,6 @@ public:
 
         if (_current_context) {
             _current_scope->_scope_elements[_current_context].push_back(make_element(ctx));
-            _parents[ctx] = _current_context;
         } else {
             // std::cout << "No context" << std::endl;
         }
@@ -1053,20 +1052,6 @@ private:
         }
     }
 
-    LuaParser::BlockContext* root_context(Scope const& scope) const {
-        auto begin = scope._scope_elements.begin();
-        auto iter = _parents.find(begin->first);
-        auto copy = iter;
-
-        while (iter != _parents.end()) {
-            copy = iter;
-            iter = _parents.find(iter->second);
-        }
-
-        return copy->second;
-    }
-
-    std::map<LuaParser::BlockContext*, LuaParser::BlockContext*> _parents;
     LuaParser::BlockContext* _current_context;
     std::stack<LuaParser::BlockContext*> _blocks;
     std::list<Scope> _scopes;
