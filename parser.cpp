@@ -164,6 +164,35 @@ namespace Exceptions {
     private:
         std::string _error;
     };
+
+    class LonelyBreak : public std::exception {
+    public:
+        LonelyBreak(int line) {
+            std::ostringstream error;
+            error << "Lonely break found on line " << line  << "\n";
+            _error = error.str();
+        }
+
+        const char* what() const noexcept {
+            return "Lonely break found\n";
+        }
+
+    private:
+        std::string _error;
+    };
+
+    class LabelAlreadyDefined : public std::exception {
+    public:
+        LabelAlreadyDefined(std::string const& label) {
+            _error = "Label " + label + " already defined\n";
+        }
+
+        const char* what() const noexcept {
+            return _error.c_str();
+        }
+    private:
+        std::string _error;
+    };
 }
 
 namespace Types {
@@ -862,9 +891,9 @@ public:
 
         if (_current_context) {
             _current_scope->_scope_elements[_current_context].push_back(make_element(ctx));
-        } else {
-            // std::cout << "No context" << std::endl;
         }
+
+        _current_scope->_scope_elements[ctx];
 
         _current_context = _blocks.top();
     }
@@ -880,13 +909,19 @@ public:
         } else {
             _current_context = _blocks.top();
         }
+
+        _loop_blocks.erase(ctx);
     }
 
     void enterStat(LuaParser::StatContext *ctx) {
         if (!ctx->getText().starts_with("local") &&
                 !ctx->getText().starts_with("function") &&
                 !ctx->getText().starts_with(("local function")) &&
-                !ctx->getText().starts_with(("goto"))) {
+                !ctx->getText().starts_with(("goto")) &&
+                !ctx->getText().starts_with("break") &&
+                !ctx->getText().starts_with("for") &&
+                !ctx->getText().starts_with("repeat") &&
+                !ctx->getText().starts_with("while")) {
             return;
         }
 
@@ -906,9 +941,20 @@ public:
                 }
             }
             // Definition of a function
-        } else {
+        } else if (ctx->getText().starts_with("function")) {
             _current_scope->_scope_elements[_current_context].push_back(make_element(Local(ctx->funcname()->getText())));
             // _current_context = nullptr;
+        } else if (ctx->getText().starts_with("for")) {
+            _loop_blocks.insert(ctx->block()[0]);
+        } else if (ctx->getText().starts_with("while")) {
+            _loop_blocks.insert(ctx->block()[0]);
+        } else if (ctx->getText().starts_with("repeat")) {
+            _loop_blocks.insert(ctx->block()[0]);
+        } else {
+            // break
+            if (_loop_blocks.empty()) {
+                throw Exceptions::LonelyBreak(ctx->getStart()->getLine());
+            }
         }
     }
 
@@ -936,11 +982,15 @@ public:
     }
 
     void validate() const {
+        std::set<LuaParser::BlockContext*> seen_contexts;
+
         for (const Scope& scope: _scopes) {
             LuaParser::BlockContext* ctx = scope._root_context;
+            validate_labels(scope, ctx, seen_contexts);
+
             std::vector<std::string> seen_labels;
             std::vector<std::pair<std::vector<ScopeElement>::const_iterator, std::vector<ScopeElement>::const_iterator>> previous;
-            explore_context(scope, ctx, seen_labels, previous);
+            explore_context(scope, scope._root_context, seen_labels, previous);
         }
     }
 
@@ -1052,11 +1102,31 @@ private:
         }
     }
 
+    void validate_labels(Scope const& scope, LuaParser::BlockContext* ctx, std::set<LuaParser::BlockContext*>& seen_contexts) const {
+        seen_contexts.insert(ctx);
+        std::vector<ScopeElement> const& elements = scope._scope_elements.find(ctx)->second;
+        std::set<std::string> labels;
+        for (ScopeElement const& element: elements) {
+            if (Label const* label = std::get_if<Label>(&element)) {
+                if (labels.find(label->_name) != labels.end()) {
+                    throw Exceptions::LabelAlreadyDefined(label->_name);
+                } else {
+                    labels.insert(label->_name);
+                }
+            } else if (LuaParser::BlockContext* const* blk = std::get_if<LuaParser::BlockContext*>(&element)) {
+                if (seen_contexts.find(*blk) == seen_contexts.end()) {
+                    validate_labels(scope, *blk, seen_contexts);
+                }
+            }
+        }
+    }
+
     LuaParser::BlockContext* _current_context;
     std::stack<LuaParser::BlockContext*> _blocks;
     std::list<Scope> _scopes;
     std::stack<Scope*> _stack_scopes;
     Scope* _current_scope;
+    std::set<LuaParser::BlockContext*> _loop_blocks;
 };
 
 
@@ -2352,10 +2422,10 @@ void tests() {
     }
 }
 
-class GotoResultExpected : public std::exception {
+class GotoBreakResultExpected : public std::exception {
 public:
-    GotoResultExpected(const std::string& path, const std::string& expected, const std::string& received) {
-        _error = "Goto result of kind " + expected + " was expected in file + " + path + ", received " + received + "\n";
+    GotoBreakResultExpected(const std::string& path, const std::string& expected, const std::string& received) {
+        _error = "Goto / break result of kind " + expected + " was expected in file + " + path + ", received " + received + "\n";
     }
 
     const char* what() const noexcept {
@@ -2376,8 +2446,16 @@ void run_goto_break_test(std::string const& path) {
     std::string header;
     stream >> header;
 
-    if (header != "success" && header != "crossed" && header != "invisible") {
-        throw std::runtime_error("Unknown goto result " + header);
+    std::vector<std::string> allowed = {
+        "success",
+        "crossed",
+        "invisible",
+        "lonely",
+        "multiple"
+    };
+
+    if (std::find(allowed.begin(), allowed.end(), header) == allowed.end()) {
+        throw std::runtime_error("Unknown goto / break result " + header);
     }
 
     antlr4::ANTLRInputStream input(stream);
@@ -2395,15 +2473,23 @@ void run_goto_break_test(std::string const& path) {
         listener.validate();
 
         if (header != "success") {
-            throw GotoResultExpected(path, header, "success");
+            throw GotoBreakResultExpected(path, header, "success");
         }
     } catch (Exceptions::CrossedLocal& crossed) {
         if (header != "crossed") {
-            throw GotoResultExpected(path, header, "crossed");
+            throw GotoBreakResultExpected(path, header, "crossed");
         }
     } catch (Exceptions::InvisibleLabel& invisible) {
         if (header != "invisible") {
-            throw GotoResultExpected(path, header, "invisible");
+            throw GotoBreakResultExpected(path, header, "invisible");
+        }
+    } catch (Exceptions::LonelyBreak& lonely) {
+        if (header != "lonely") {
+            throw GotoBreakResultExpected(path, header, "lonely");
+        }
+    } catch (Exceptions::LabelAlreadyDefined& label) {
+        if (header != "multiple") {
+            throw GotoBreakResultExpected(path, header, "multiple");
         }
     } catch (std::exception& e) {
         std::cerr << e.what() << std::endl;
