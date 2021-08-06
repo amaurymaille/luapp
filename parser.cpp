@@ -1619,7 +1619,7 @@ public:
                 throw Exceptions::TypeEqualityExpected(expression, type, left.type_as_string());
             }
 
-            std::cout << "Expression " << expression << " has value " << left.value_as_string() << " of type " << left.type_as_string() << " (expected equivalent of " << middle.value_as_string() << " of type " << type << ") => OK" << std::endl;
+            // std::cout << "Expression " << expression << " has value " << left.value_as_string() << " of type " << left.type_as_string() << " (expected equivalent of " << middle.value_as_string() << " of type " << type << ") => OK" << std::endl;
         } else if (funcname == "expect_failure") {
             std::string expression(context->nameAndArgs()[0]->args()->explist()->exp()[0]->getText());
             try {
