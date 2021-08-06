@@ -133,8 +133,15 @@ namespace Exceptions {
 
     class CrossedLocal : public std::exception {
     public:
-        CrossedLocal(std::string const& label, std::string const& local) {
+        /*CrossedLocal(std::string const& label, std::string const& local) {
             _error = "goto " + label + " crosses initialization of local " + local + "\n";
+        }*/
+
+        CrossedLocal(std::string const& label, std::vector<std::string> const& locals) {
+            _error = "goto " + label + " crosses initialization of local" + ((locals.size() != 1) ? "s" : "") + ": ";
+            for (std::string const& local: locals) {
+                _error += local + " ";
+            }
         }
 
         const char* what() const noexcept {
@@ -838,10 +845,10 @@ public:
     }
 
     void enterChunk(LuaParser::ChunkContext *ctx) {
-        _root_context = ctx->block();
         _scopes.push_back(Scope());
         _stack_scopes.push(&_scopes.back());
         _current_scope = &_scopes.back();
+        _current_scope->_root_context = ctx->block();
     }
 
     void enterBlock(LuaParser::BlockContext *ctx) {
@@ -902,15 +909,16 @@ public:
     }
 
     // Beginning of the scope of an inner function
-    void enterFunctiondef(LuaParser::FunctiondefContext *) {
+    void enterFuncbody(LuaParser::FuncbodyContext *ctx) override {
         _scopes.push_back(Scope());
         _current_scope = &_scopes.back();
         _stack_scopes.push(&_scopes.back());
+        _current_scope->_root_context = ctx->block();
         _current_context = nullptr;
     }
 
     // End of the scope of an inner function
-    void exitFunctiondef(LuaParser::FunctiondefContext *) {
+    void exitFuncbody(LuaParser::FuncbodyContext *) override {
         _stack_scopes.pop();
         if (_stack_scopes.empty()) {
             _current_scope = nullptr;
@@ -925,15 +933,7 @@ public:
 
     void validate() const {
         for (const Scope& scope: _scopes) {
-            LuaParser::BlockContext* ctx = root_context(scope);
-            if (ctx == nullptr) {
-                ctx = _root_context;
-            }
-
-            if (ctx == nullptr) {
-                std::cout << "No context found..." << std::endl;
-                return;
-            }
+            LuaParser::BlockContext* ctx = scope._root_context;
             std::vector<std::string> seen_labels;
             std::vector<std::pair<std::vector<ScopeElement>::const_iterator, std::vector<ScopeElement>::const_iterator>> previous;
             explore_context(scope, ctx, seen_labels, previous);
@@ -976,6 +976,7 @@ private:
      */
     struct Scope {
         std::map<LuaParser::BlockContext*, std::vector<ScopeElement>> _scope_elements;
+        LuaParser::BlockContext* _root_context;
     };
 
     void explore_context(Scope const& scope,
@@ -986,6 +987,10 @@ private:
         std::vector<std::pair<std::vector<ScopeElement>::const_iterator, std::vector<ScopeElement>::const_iterator>> iters(previous);
 
         auto scope_element_iter_because_const = scope._scope_elements.find(ctx);
+        if (scope_element_iter_because_const == scope._scope_elements.end()) {
+            throw std::runtime_error("Unable to find context");
+        }
+
         auto vec = scope_element_iter_because_const->second;
         for (auto iter = vec.cbegin(); iter != vec.cend(); ++iter) {
             ScopeElement const& element = *iter;
@@ -1016,6 +1021,7 @@ private:
         for (auto iter = previous.rbegin(); iter != previous.rend(); ++iter) {
             auto elements_iter = iter->first;
             auto end_iter = iter->second;
+            std::vector<std::string> crossed;
 
             if (found) {
                 break;
@@ -1024,15 +1030,12 @@ private:
             for (; elements_iter != end_iter; ++elements_iter) {
                 ScopeElement const& element = *elements_iter;
                 if (const Local* local = std::get_if<Local>(&element)) {
-                    auto copy = iter;
-                    ++copy;
-                    if (copy == previous.rend()) {
-                        throw Exceptions::CrossedLocal(search, local->_name);
-                    } else {
-                        break;
-                    }
+                    crossed.push_back(local->_name);
                 } else if (const Label* label = std::get_if<Label>(&element)) {
                     if (label->_name == search) {
+                        if (!crossed.empty()) {
+                            throw Exceptions::CrossedLocal(search, crossed);
+                        }
                         found = true;
                         break;
                     }
@@ -1060,7 +1063,6 @@ private:
 
     std::map<LuaParser::BlockContext*, LuaParser::BlockContext*> _parents;
     LuaParser::BlockContext* _current_context;
-    LuaParser::BlockContext* _root_context;
     std::stack<LuaParser::BlockContext*> _blocks;
     std::list<Scope> _scopes;
     std::stack<Scope*> _stack_scopes;
