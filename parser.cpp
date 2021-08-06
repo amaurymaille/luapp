@@ -838,9 +838,9 @@ namespace Types {
  * escape from the boundary of the function you are (maybe in).
  * Additionnaly, gotos cannot cross the declaration of a local variable.
  */
-class GotoListener : public LuaBaseListener {
+class GotoBreakListener : public LuaBaseListener {
 public:
-    GotoListener() {
+    GotoBreakListener() {
         _current_context = nullptr;
     }
 
@@ -849,6 +849,7 @@ public:
         _stack_scopes.push(&_scopes.back());
         _current_scope = &_scopes.back();
         _current_scope->_root_context = ctx->block();
+        _current_scope->_scope_elements[ctx->block()];
     }
 
     void enterBlock(LuaParser::BlockContext *ctx) {
@@ -1073,7 +1074,7 @@ private:
 class MyLuaVisitor : public LuaVisitor {
 public:
     MyLuaVisitor(antlr4::tree::ParseTree* tree) {
-        GotoListener listener;
+        GotoBreakListener listener;
         antlr4::tree::ParseTreeWalker::DEFAULT.walk(&listener, tree);
         listener.validate();
     }
@@ -2356,7 +2357,7 @@ void tests() {
         auto v = (p.path() | std::views::reverse).begin();
         ++v;
 
-        if (*v == "00_goto")
+        if (*v == "00_goto_break")
             continue;
         run_test(p.path().string());
     }
@@ -2376,7 +2377,7 @@ private:
     std::string _error;
 };
 
-void run_goto_test(std::string const& path) {
+void run_goto_break_test(std::string const& path) {
     std::ifstream stream(path, std::ios::in);
 
     if (!stream) {
@@ -2400,7 +2401,7 @@ void run_goto_test(std::string const& path) {
 
     antlr4::tree::ParseTree* tree = parser.chunk();
     try {
-        GotoListener listener;
+        GotoBreakListener listener;
         antlr4::tree::ParseTreeWalker::DEFAULT.walk(&listener, tree);
         listener.validate();
 
@@ -2423,13 +2424,13 @@ void run_goto_test(std::string const& path) {
     std::cout << "[OK] " << path << std::endl;
 }
 
-void test_goto() {
-    for (auto& p: fs::directory_iterator("tests/00_goto")) {
+void test_goto_break() {
+    for (auto& p: fs::directory_iterator("tests/00_goto_break")) {
         if (p.path().string()[0] == '.' || p.path().extension() != ".lua") {
             continue;
         }
 
-        run_goto_test(p.path().string());
+        run_goto_break_test(p.path().string());
     }
 }
 
@@ -2437,8 +2438,8 @@ struct CLIArgs {
     bool _test = false;
     std::string _test_file;
     bool _base = false;
-    bool _goto = false;
-    std::string _goto_file;
+    bool _goto_break = false;
+    std::string _goto_break_file;
 };
 
 void parse_args(int argc, char** argv, CLIArgs& args) {
@@ -2447,7 +2448,7 @@ void parse_args(int argc, char** argv, CLIArgs& args) {
             ("help", "Display this help and exit")
             ("test", po::value<std::string>()->implicit_value(""), "Run all tests, or on the given file only")
             ("base", "Run the base file to get the AST")
-            ("goto", po::value<std::string>()->implicit_value(""), "Run tests on the goto directory with listener only, or only on the given file");
+            ("gb", po::value<std::string>()->implicit_value(""), "Run tests on the goto_break directory with listener only, or only on the given file");
     po::variables_map vm;
     po::command_line_parser parser(argc, argv);
     parser.options(options);
@@ -2468,9 +2469,9 @@ void parse_args(int argc, char** argv, CLIArgs& args) {
         args._base = true;
     }
 
-    if (vm.count("goto")) {
-        args._goto = true;
-        args._goto_file = vm["goto"].as<std::string>();
+    if (vm.count("gb")) {
+        args._goto_break = true;
+        args._goto_break_file = vm["gb"].as<std::string>();
     }
 }
 
@@ -2504,11 +2505,11 @@ int main(int argc, char** argv) {
         }
     }
 
-    if (args._goto) {
-        if (!args._goto_file.empty()) {
-            run_goto_test(args._goto_file);
+    if (args._goto_break) {
+        if (!args._goto_break_file.empty()) {
+            run_goto_break_test(args._goto_break_file);
         } else {
-            test_goto();
+            test_goto_break();
         }
     }
 
