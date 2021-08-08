@@ -478,6 +478,10 @@ namespace Types {
         }
 
         void remove_reference(LuaValue& l) {
+            if (_references.find(l) == _references.end()) {
+                return;
+            }
+
             unsigned int& count = _references[l];
             if (count == 0) {
                 throw std::runtime_error("Attempt to remove reference of value without reference");
@@ -637,6 +641,8 @@ namespace Types {
                 std::ostringstream stream;
                 stream << as<double>();
                 return stream.str();
+            } else if (is<Nil>()) {
+                return "nil";
             } else {
                 throw Exceptions::ContextlessBadTypeException("number or string", type_as_string());
             }
@@ -747,6 +753,7 @@ namespace Types {
         static Value make_table(std::list<std::pair<Value, Value>> const& values) {
             Value v;
             alloc<Table>(v, values);
+            sGC->add_reference(v._type);
             return v;
         }
 
@@ -886,6 +893,8 @@ namespace Types {
                 return _rvalue().as<T>();
             } else if  (lvalue()) {
                 return _lvalue()->as<T>();
+            } else if (list()) {
+                return _list()[0].as<T>();
             } else {
                 _error();
             }
@@ -968,6 +977,8 @@ namespace Types {
                 return _rvalue().as_double_weak();
             } else if  (lvalue()) {
                 return _lvalue()->as_double_weak();
+            } else if (list()) {
+                return _list()[0].as_double_weak();
             } else {
                 _error();
             }
@@ -978,6 +989,8 @@ namespace Types {
                 return _rvalue().as_int_weak(allow_double);
             } else if  (lvalue()) {
                 return _lvalue()->as_int_weak(allow_double);
+            } else if (list()) {
+                return _list()[0].as_int_weak(allow_double);
             } else {
                 _error();
             }
@@ -988,6 +1001,8 @@ namespace Types {
                 return _rvalue().as_bool_weak();
             } else if  (lvalue()) {
                 return _lvalue()->as_bool_weak();
+            } else if (list()) {
+                return _list()[0].as_bool_weak();
             } else {
                 _error();
             }
@@ -998,6 +1013,8 @@ namespace Types {
                 return _rvalue().as_string();
             } else if  (lvalue()) {
                 return _lvalue()->as_string();
+            } else if (list()) {
+                return _list()[0].as_string();
             } else {
                 _error();
             }
@@ -1014,6 +1031,8 @@ namespace Types {
                 _value = other._lvalue();
             } else if (other.rvalue()) {
                 _value = other.get();
+            } else if (other.list()) {
+                _value = other._list();
             } else {
                 _error();
             }
@@ -1045,6 +1064,8 @@ namespace Types {
                 return _lvalue()->has_dot();
             } else if  (rvalue()) {
                 return _rvalue().has_dot();
+            } else if (list()) {
+                return _list()[0].has_dot();
             } else {
                 _error();
             }
@@ -1056,6 +1077,8 @@ namespace Types {
                 return _lvalue()->is<T>();
             } else if  (rvalue()) {
                 return _rvalue().is<T>();
+            } else if (list()) {
+                return _list()[0].is<T>();
             } else {
                 _error();
             }
@@ -1066,6 +1089,8 @@ namespace Types {
                 return _lvalue()->is_refcounted();
             } else if (rvalue()) {
                 return _rvalue().is_refcounted();
+            } else if (list()) {
+                return _list()[0].is_refcounted();
             } else {
                 _error();
             }
@@ -1076,6 +1101,8 @@ namespace Types {
                 return _lvalue()->from_string_to_number(force_double);
             } else if  (rvalue()) {
                 return _rvalue().from_string_to_number(force_double);
+            } else if (list()) {
+                return _list()[0].from_string_to_number(force_double);
             } else {
                 _error();
             }
@@ -1086,6 +1113,8 @@ namespace Types {
                 return _lvalue()->type_as_string();
             } else if  (rvalue()) {
                 return _rvalue().type_as_string();
+            } else if (list()) {
+                return _list()[0].type_as_string();
             } else {
                 _error();
             }
@@ -1096,6 +1125,8 @@ namespace Types {
                 return _lvalue()->value_as_string();
             } else if  (rvalue()) {
                 return _rvalue().value_as_string();
+            } else if (list()) {
+                return _list()[0].value_as_string();
             } else {
                 _error();
             }
@@ -1106,6 +1137,8 @@ namespace Types {
                 return _lvalue()->subscript(value);
             } else if  (rvalue()) {
                 return _rvalue().subscript(value);
+            } else if (list()) {
+                return _list()[0].subscript(value);
             } else {
                 _error();
             }
@@ -1116,6 +1149,8 @@ namespace Types {
                 return _lvalue()->dot(s);
             } else if  (rvalue()) {
                 return _rvalue().dot(s);
+            } else if (list()) {
+                return _list()[0].dot(s);
             } else {
                 _error();
             }
@@ -1126,6 +1161,8 @@ namespace Types {
                 return _lvalue()->value();
             } else if  (rvalue()) {
                 return _rvalue().value();
+            } else if (list()) {
+                return _list()[0].value();
             } else {
                 _error();
             }
@@ -1264,14 +1301,18 @@ namespace Types {
 namespace Exceptions {
     class Return : public std::exception {
     public:
-        Return(std::vector<Types::Var> const& values) : _values(values) { }
+        Return(std::vector<Types::Var>&& values) : _values(std::move(values)) {
+            /* for (Types::Var& v: values) {
+                sGC->add_reference(v.value());
+            } */
+        }
 
         std::vector<Types::Var> const& get() const { return _values; }
 
         const char* what() const noexcept { return ""; }
 
     private:
-        std::vector<Types::Var> const& _values;
+        std::vector<Types::Var> _values;
     };
 }
 
@@ -1375,6 +1416,7 @@ public:
         } else if (ctx->getText().starts_with("local")) {
             if (ctx->funcbody()) {
                 _current_scope->_scope_elements[_current_context].push_back(make_element(Local(ctx->NAME()->getText())));
+                _locals_per_block[_blocks_relations.back()].insert(std::make_pair(ctx->NAME()->getText(), _blocks_relations.back()));
                 // _current_context = nullptr;
             } else {
                 LuaParser::AttnamelistContext* lst = ctx->attnamelist();
@@ -1791,7 +1833,7 @@ public:
             retval = v;
         }
 
-        throw Exceptions::Return(retval);
+        throw Exceptions::Return(std::move(retval));
     }
 
     virtual antlrcpp::Any visitLabel(LuaParser::LabelContext *) {
@@ -1829,17 +1871,24 @@ public:
         }
 
         LuaParser::FuncbodyContext* body = dynamic_cast<LuaParser::StatContext*>(context->parent)->funcbody();
-        Types::Function* f = new Types::Function(std::move(visit(body->parlist()).as<std::vector<std::string>>()), body->block());
+        Types::Function* f;
+        if (body->parlist()) {
+            f = new Types::Function(std::move(visit(body->parlist()).as<std::vector<std::string>>()), body->block());
+        } else {
+            f = new Types::Function(std::vector<std::string>(), body->block());
+        }
         close_function(f, body->block());
 
         if (source == &Types::Value::_nil) {
             Types::Value func;
             func.value() = f;
             table->as<Types::Table*>()->add_field(last_part, func);
+            sGC->add_reference(func.value());
         } else {
             Types::Value* func = new Types::Value();
             func->value() = f;
             _global_values[last_part] = func;
+            sGC->add_reference(func->value());
         }
 
         return Types::Var::make(Types::Value::make_nil());
@@ -2149,7 +2198,12 @@ public:
 
     virtual antlrcpp::Any visitPrefixexp(LuaParser::PrefixexpContext *context) {
         Types::Var val = visit(context->varOrExp()).as<Types::Var>();
-        return val;
+        std::vector<NameAndArgs> names_and_args;
+        for (LuaParser::NameAndArgsContext* ctx: context->nameAndArgs()) {
+            names_and_args.push_back(visit(ctx).as<NameAndArgs>());
+        }
+
+        return process_names_and_args(val, names_and_args);
     }
 
     virtual antlrcpp::Any visitFunctioncall(LuaParser::FunctioncallContext *context) {
@@ -2184,7 +2238,13 @@ public:
             auto p = lookup_name(name, false); // Don't throw here
 
             if (p.first) {
-                result = Types::Var::make(p.first);
+                if (_var__context == Var_Context::VARLIST) {
+                    result = Types::Var::make(p.first);
+                } else {
+                    // Copy, because having pointers is dangerous. Only give
+                    // a pointer when needed.
+                    result = Types::Var::make(*p.first);
+                }
             } else {
                 if (_var__context == Var_Context::VARLIST) {
                     Types::Value* new_value = new Types::Value();
@@ -2276,10 +2336,12 @@ public:
             TableConstructor constructor;
             constructor._var = visit(context->tableconstructor()).as<Types::Var>();
             args = constructor;
-        } else {
+        } else if (context->string()) {
             String string;
             string._var = visit(context->string()).as<Types::Var>();
             args = string;
+        } else {
+            args = std::vector<Types::Var>();
         }
 
         return args;
@@ -2288,12 +2350,18 @@ public:
     virtual antlrcpp::Any visitFunctiondef(LuaParser::FunctiondefContext *context) {
         std::vector<std::string> names = visit(context->funcbody()).as<std::vector<std::string>>();
         Types::Function* function = new Types::Function(std::move(names), context->funcbody()->block());
+        close_function(function, context->funcbody()->block());
         Types::Value v; v._type = function;
+        sGC->add_reference(v._type);
         return Types::Var::make(v);
     }
 
     virtual antlrcpp::Any visitFuncbody(LuaParser::FuncbodyContext *context) {
-        return visit(context->parlist());
+        if (LuaParser::ParlistContext* ctx = context->parlist()) {
+            return visit(ctx);
+        } else {
+            return std::vector<std::string>();
+        }
     }
 
     virtual antlrcpp::Any visitParlist(LuaParser::ParlistContext *context) {
@@ -2304,8 +2372,11 @@ public:
             size_t n = context->getText().size();
             std::vector<std::string> nl = visit(context->namelist()).as<std::vector<std::string>>();
             std::ranges::for_each(nl, [&names](std::string const& name) { names.push_back(name);});
-            if (context->getText().substr(n - 4, std::string::npos) == "...") {
-                names.push_back("...");
+
+            if (context->getText().size() >= 3) {
+                if (context->getText().substr(n - 3, std::string::npos) == "...") {
+                    names.push_back("...");
+                }
             }
         }
 
@@ -2353,8 +2424,8 @@ public:
         std::string text(context->getText());
 
         if (text.starts_with("[")) {
-            std::cout << "[NYI] Expressions as keys" << std::endl;
-            return std::make_pair(std::make_optional(Types::Var::make(Types::Value::make_nil())), Types::Var::make(Types::Value::make_nil()));
+            // std::cout << "[NYI] Expressions as keys" << std::endl;
+            return std::make_pair(std::make_optional(visit(context->exp(0)).as<Types::Var>()), visit(context->exp(1)).as<Types::Var>());
         } else if (context->NAME()) {
             return std::make_pair(std::make_optional(Types::Var::make(Types::Value::make_string(context->NAME()->getText()))), visit(context->exp()[0]).as<Types::Var>());
         } else {
@@ -2614,7 +2685,9 @@ private:
                 throw std::runtime_error("How the hell did you arrive here ?");
             }
 
+            sGC->remove_reference(vars[i]._lvalue()->value());
             vars[i]._lvalue()->value() = exprs[i].get().value();
+            sGC->add_reference(exprs[i].get().value());
         }
 
         // Adjust for elipsis / value list
@@ -2626,12 +2699,16 @@ private:
                 if (last.is<Types::Elipsis>()) {
                     std::vector<Types::Value*> remains = last.as<Types::Elipsis>().values();
                     for (unsigned int j = 0; j < remains.size() && i < vars.size(); ++i, ++j) {
+                        sGC->remove_reference(vars[i]._lvalue()->value());
                         vars[i]._lvalue()->value() = remains[j]->value();
+                        sGC->add_reference(remains[j]->value());
                     }
                 } else {
                     std::vector<Types::Value> remains(std::move(last._list()));
-                    for (unsigned int j = 0; j < remains.size() && i < vars.size(); ++i, ++j) {
+                    for (unsigned int j = 1; j < remains.size() && i < vars.size(); ++i, ++j) {
+                        sGC->remove_reference(vars[i]._lvalue()->value());
                         vars[i]._lvalue()->value() = remains[j].value();
+                        sGC->add_reference(remains[j].value());
                     }
                 }
             }
@@ -2812,6 +2889,7 @@ private:
             }
 
             _local_values.back()[current_block()][names[i]]->value() = values[i].get().value();
+            sGC->add_reference(values[i].get().value());
         }
 
         // Adjust
@@ -2829,15 +2907,17 @@ private:
                         }
 
                         _local_values.back()[current_block()][names[i]]->value() = remains[j]->value();
+                        sGC->add_reference(remains[j]->value());
                     }
                 } else {
                     std::vector<Types::Value> remains(std::move(last._list()));
-                    for (unsigned int j = 0; j < remains.size() && i < names.size(); ++i, ++j) {
+                    for (unsigned int j = 1; j < remains.size() && i < names.size(); ++i, ++j) {
                         auto it = _local_values.back()[current_block()].find(names[i]);
                         if (it == _local_values.back()[current_block()].end()) {
                             _local_values.back()[current_block()][names[i]] = new Types::Value();
                         }
 
+                        sGC->add_reference(remains[j].value());
                         _local_values.back()[current_block()][names[i]]->value() = remains[j].value();
                     }
                 }
@@ -2854,6 +2934,7 @@ private:
         close_function(f, body->block());
         Types::Value* value = new Types::Value;
         value->_type = f;
+        sGC->add_reference(value->value());
         _local_values.back()[current_block()][name] = value;
     }
 
@@ -2976,6 +3057,7 @@ private:
         for (; i < std::min(values.size(), function->formal_parameters().size()); ++i) {
             Types::Value* value = new Types::Value();
             value->value() = values[i].value();
+            sGC->add_reference(values[i].value());
             _local_values.back()[ctx][function->formal_parameters()[i]] = value;
         }
 
@@ -2993,6 +3075,7 @@ private:
                 for (; i < values.size(); ++i) {
                     Types::Value* value = new Types::Value();
                     value->value() = values[i].value();
+                    sGC->add_reference(values[i].value());
                     elipsis_values.push_back(value);
                 }
                 elipsis->value() = Types::Elipsis(elipsis_values);
@@ -3004,12 +3087,14 @@ private:
         try {
             visit(ctx);
             _functions.pop_back();
+            _local_values.pop_back();
             return std::vector<Types::Var>();
         } catch (Exceptions::Return& e) {
             // If control flow is disrupted by a return statement, blocks may
             // not be in a coherent state. Stabilize them only in this case.
             stabilize_blocks(current_block);
             _functions.pop_back();
+            _local_values.pop_back();
             return e.get();
         }
     }
@@ -3144,7 +3229,9 @@ private:
             if (results.size() == 0) {
                 result = Types::Var::make(Types::Value::make_nil());
             } else {
-                result = results[0];
+                std::vector<Types::Value> tmp;
+                std::transform(results.begin(), results.end(), std::back_inserter(tmp), [](Types::Var const& v) { return v.get(); });
+                result = Types::Var::make(tmp);
             }
         }
 
@@ -3209,6 +3296,7 @@ void run_test(std::string const& path) {
     }
 
     antlr4::tree::ParseTree* tree = parser.chunk();
+    std::cout << tree->toStringTree(&parser, true) << std::endl;
     try {
         MyLuaVisitor visitor(tree);
         visitor.visit(tree);
