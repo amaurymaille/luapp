@@ -228,6 +228,20 @@ namespace Exceptions {
     private:
         std::string const& _label;
     };
+
+    class BadCall : public std::exception {
+    public:
+        BadCall(std::string const& type) {
+            _error = "Attempted to call a function on " + type;
+        }
+
+        const char* what() const noexcept {
+            return _error.c_str();
+        }
+
+    private:
+        std::string _error;
+    };
 }
 
 namespace Types {
@@ -251,6 +265,17 @@ namespace Types {
     };
 
     struct Elipsis {
+    public:
+        Elipsis(std::vector<Types::Value*> const& values) : _values(values) { }
+
+        Elipsis(Elipsis const& other) : _values(other._values) {
+            throw std::runtime_error("Copying elipsis is illegal. I think ?");
+        }
+
+        Elipsis& operator=(const Elipsis&) const {
+            throw std::runtime_error("Copying elipsis is illegal. I think ?");
+        }
+
         bool operator==(const Elipsis&) const {
             return false;
         }
@@ -262,11 +287,24 @@ namespace Types {
         bool operator<(const Elipsis&) const {
             return true;
         }
+
+        std::vector<Types::Value*> const& values() const { return _values; }
+
+    private:
+        std::vector<Types::Value*> const& _values;
     };
 
     typedef std::variant<bool, int, double, std::string, Nil, Elipsis, Function*, Userdata*, Table*> LuaValue;
 
-    struct Function {
+    class Function {
+    public:
+        Function(std::vector<std::string>&& formal_parameters, LuaParser::BlockContext* body) :
+            _body(body), _formal_parameters(std::move(formal_parameters)) {
+
+        }
+
+        ~Function();
+
         bool operator==(const Function& other) const {
             return this == &other;
         }
@@ -274,6 +312,18 @@ namespace Types {
         bool operator!=(const Function& other) const {
             return this != &other;
         }
+
+        void close(std::string const& name, Value* value);
+        std::map<std::string, Value*> const& closure() const { return _closure; }
+        LuaParser::BlockContext* get_context() const { return _body; }
+        std::vector<std::string> const& formal_parameters() const { return _formal_parameters; }
+
+    private:
+        // Values under which the function is closed.
+        // Context not preserved because only names are required.
+        std::map<std::string, Value*> _closure;
+        LuaParser::BlockContext* _body;
+        std::vector<std::string> _formal_parameters;
     };
 
     struct Userdata {
@@ -301,6 +351,8 @@ namespace Types {
         int border() const;
         Value& subscript(Value const&);
         Value& dot(std::string const&);
+        void add_field(std::string const& name, Value const& value);
+        void add_field(Value const& source, Value const& dst);
 
     private:
         struct FieldSetter {
@@ -494,10 +546,11 @@ namespace Types {
             _nil._type = Nil();
             _true._type = true;
             _false._type = false;
-            _elipsis._type = Elipsis();
+            // _elipsis._type = Elipsis();
         }
 
         friend Table::Table(const std::list<std::pair<Value, Value>>&);
+        friend void Table::add_field(const Value&, const Value&);
         friend Value& Table::subscript(const Value &);
         friend Value& Table::dot(const std::string &);
         friend MyLuaVisitor;
@@ -564,7 +617,12 @@ namespace Types {
         }
 
         template<typename T>
-        T as() const {
+        T& as() {
+            return std::get<T>(_type);
+        }
+
+        template<typename T>
+        T const& as() const {
             return std::get<T>(_type);
         }
 
@@ -684,7 +742,7 @@ namespace Types {
 
         static Value make_false() { return _false; }
 
-        static Value make_elipsis() { return  _elipsis; }
+        // static Value make_elipsis() { return  _elipsis; }
 
         static Value make_table(std::list<std::pair<Value, Value>> const& values) {
             Value v;
@@ -788,20 +846,38 @@ namespace Types {
             return _type;
         }
 
+        LuaValue const& value() const { return _type; }
+        void add_reference() {
+            ++_references;
+        }
+
+        void remove_reference() {
+            if (_references == 0) {
+                throw std::runtime_error("Removing reference on object with no references");
+            }
+
+            --_references;
+            if (_references == 0) {
+                delete this;
+            }
+        }
+
     private:
         LuaValue _type;
 
         static Value _nil;
-        static Value _elipsis;
+        // static Value _elipsis;
         static Value _true;
         static Value _false;
+
+        unsigned int _references = 1;
     };
 
     class VarError {};
     VarError var_error_t;
 
     /* A free value (rvalue); a bound value (lvalue); an error */
-    typedef std::variant<Value, Value*, VarError> VarElements;
+    typedef std::variant<Value, Value*, std::vector<Value>, VarError> VarElements;
     struct Var {
     public:
         template<typename T>
@@ -820,6 +896,8 @@ namespace Types {
                 return *_lvalue();
             } else if (rvalue()) {
                 return _rvalue();
+            } else if (list()) {
+                return _list()[0];
             } else {
                 _error();
             }
@@ -841,12 +919,24 @@ namespace Types {
             return std::get<Value>(_value);
         }
 
+        constexpr std::vector<Value>& _list() {
+            return std::get<std::vector<Value>>(_value);
+        }
+
+        constexpr std::vector<Value> const& _list() const {
+            return std::get<std::vector<Value>>(_value);
+        }
+
         constexpr bool lvalue() const {
             return std::holds_alternative<Value*>(_value);
         }
 
         constexpr bool rvalue() const {
             return std::holds_alternative<Value>(_value);
+        }
+
+        constexpr bool list() const {
+            return std::holds_alternative<std::vector<Value>>(_value);
         }
 
         void morph() {
@@ -1052,7 +1142,22 @@ namespace Types {
     Value Value::_nil;
     Value Value::_true;
     Value Value::_false;
-    Value Value::_elipsis;
+    // Value Value::_elipsis;
+
+    Function::~Function() {
+        for (Value* v: std::views::values(_closure)) {
+            v->remove_reference();
+        }
+    }
+
+    void Function::close(std::string const& name, Value* value) {
+        if (_closure.find(name) != _closure.end()) {
+            throw std::runtime_error("Closing function twice under " + name);
+        }
+
+        _closure[name] = value;
+        value->add_reference();
+    }
 
     int Table::border() const {
         std::set<unsigned int> keys;
@@ -1099,6 +1204,14 @@ namespace Types {
         } else {
             return Value::_nil;
         }
+    }
+
+    void Table::add_field(const std::string &name, const Value &value) {
+        _string_fields[name] = value;
+    }
+
+    void Table::add_field(const Value &source, const Value &dst) {
+        std::visit(FieldSetter(*this, dst), source._type);
     }
 
     void Table::FieldSetter::operator()(int i) {
@@ -1171,6 +1284,7 @@ namespace Exceptions {
 class GotoBreakListener : public LuaBaseListener {
 public:
     typedef std::multimap<std::string, LuaParser::BlockContext*> BlocksPerLocal;
+    typedef std::multimap<LuaParser::BlockContext*, LuaParser::BlockContext*> FunctionParents;
 
 public:
     GotoBreakListener() {
@@ -1208,8 +1322,10 @@ public:
             // Any block has access to all the locals of its parent blocks.
             // Special care required for for loops because they don't use local
             // to start declare their variables, and they declare them outside of
-            // the block where they are visible.
-            if (_locals_per_block.find(ctx) != _locals_per_block.end()) { // for
+            // the block where they are visible. Same applies to functions'
+            // parameters which are local to the function but appear before the
+            // body block of the function.
+            if (_locals_per_block.find(ctx) != _locals_per_block.end()) { // for, params
                 auto& source = _locals_per_block[_blocks_relations.back()];
                 for (auto& p: source) {
                     _locals_per_block[ctx].insert(std::make_pair(p.first, p.second));
@@ -1299,6 +1415,18 @@ public:
 
     // Beginning of the scope of an inner function
     void enterFuncbody(LuaParser::FuncbodyContext *ctx) override {
+        if (ctx->parlist()) {
+            if (LuaParser::NamelistContext* nl = ctx->parlist()->namelist()) {
+                for (antlr4::tree::TerminalNode* node: nl->NAME()) {
+                    _locals_per_block[ctx->block()].insert(std::make_pair(node->getText(), ctx->block()));
+                }
+            }
+        }
+
+        for (LuaParser::BlockContext* blk: _blocks_relations) {
+            _functions_parents.insert(std::make_pair(ctx->block(), blk));
+        }
+
         _scopes.push_back(Scope());
         _current_scope = &_scopes.back();
         _stack_scopes.push(&_scopes.back());
@@ -1344,6 +1472,10 @@ public:
 
     std::pair<BlocksPerLocal::iterator, BlocksPerLocal::iterator> get_context_for_local(LuaParser::BlockContext const* ctx, std::string const& name) {
         return _locals_per_block[const_cast<LuaParser::BlockContext*>(ctx)].equal_range(name);
+    }
+
+    std::pair<FunctionParents::iterator, FunctionParents::iterator> get_parents_of_function(LuaParser::BlockContext* fnctx) {
+        return _functions_parents.equal_range(fnctx);
     }
 
 private:
@@ -1496,6 +1628,10 @@ private:
     /// redefined it will fetch its value from the current context.
     std::map<LuaParser::BlockContext*, BlocksPerLocal> _locals_per_block;
     std::vector<LuaParser::BlockContext*> _blocks_relations;
+
+    /// Used to compute the closure of functions: for each function, list the
+    /// blocks this function can see.
+    FunctionParents _functions_parents;
 };
 
 
@@ -1507,12 +1643,23 @@ public:
     }
 
     ~MyLuaVisitor() {
+        for (auto& p: _global_values) {
+            p.second->remove_reference();
+        }
 
+        for (unsigned int i = 0; i < _local_values.size(); ++i) {
+            for (auto& p1: _local_values[i]) {
+                for (auto& p2: p1.second) {
+                    p2.second->remove_reference();
+                }
+            }
+        }
     }
 
     virtual antlrcpp::Any visitChunk(LuaParser::ChunkContext *context) {
         // std::cout << "Chunk: " << context->getText() << std::endl;
         try {
+            _local_values.push_back(decltype(_local_values)::value_type());
             return visit(context->block());
         } catch (Exceptions::Return& ret) {
             return ret.get();
@@ -1520,20 +1667,18 @@ public:
     }
 
     virtual antlrcpp::Any visitBlock(LuaParser::BlockContext *context) {
-        // std::cout << "Block: " << context->getText() << std::endl;
         bool coming_from_for = _coming_from_for;
+        bool coming_from_funcall = _coming_from_funcall;
 
-        if (_coming_from_for) {
-            _coming_from_for = false;
-        }
+        _coming_from_for = false;
+        _coming_from_funcall = false;
 
-        if (!coming_from_for) {
+        if (!coming_from_for && !coming_from_funcall) {
             _blocks.push_back(context);
         }
-        // Generate an empty map for this block locals.
+
         antlrcpp::Any retval = Types::Value::make_nil();
 
-        // std::cout << context->getText() << std::endl;
         for (unsigned int i = 0; i < context->stat().size(); ) {
             LuaParser::StatContext* ctx = context->stat(i);
 
@@ -1564,12 +1709,8 @@ public:
             return visit(ctx); // [[noreturn]]
         }
 
-        /* for (auto& value: std::views::values(_local_values.top())) {
-            value->remove_reference();
-        } */
-
         if (!coming_from_for) {
-            _local_values.erase(context);
+            erase_block(context);
         }
 
         if (_blocks.back() != context) {
@@ -1658,17 +1799,60 @@ public:
     }
 
     virtual antlrcpp::Any visitFuncname(LuaParser::FuncnameContext *context) {
-        return nyi("Funcname");
+        std::string full_name(context->getText());
+        std::string last_part;
+        std::vector<antlr4::tree::TerminalNode*> names(context->NAME());
+        Types::Value* source = nullptr;
+        Types::Value* table = nullptr;
+        for (std::string part: std::views::transform(names, [](antlr4::tree::TerminalNode* node) { return node->getText(); })) {
+            if (source == nullptr) {
+                source = lookup_name(part, false).first;
+                last_part = full_name;
+                full_name = full_name.substr(0, part.size());
+
+                if (!source) {
+                    if (names.size() != 1) {
+                        throw Exceptions::BadDotAccess(source->type_as_string());
+                    }
+
+                    break;
+                }
+            } else {
+                if (!source->is<Types::Table*>()) {
+                    throw Exceptions::BadDotAccess(source->type_as_string());
+                }
+                table = source;
+                source = &(source->as<Types::Table*>()->dot(part));
+                last_part = full_name;
+                full_name = full_name.substr(0, part.size() + 1);
+            }
+        }
+
+        LuaParser::FuncbodyContext* body = dynamic_cast<LuaParser::StatContext*>(context->parent)->funcbody();
+        Types::Function* f = new Types::Function(std::move(visit(body->parlist()).as<std::vector<std::string>>()), body->block());
+        close_function(f, body->block());
+
+        if (source == &Types::Value::_nil) {
+            Types::Value func;
+            func.value() = f;
+            table->as<Types::Table*>()->add_field(last_part, func);
+        } else {
+            Types::Value* func = new Types::Value();
+            func->value() = f;
+            _global_values[last_part] = func;
+        }
+
+        return Types::Var::make(Types::Value::make_nil());
     }
 
     virtual antlrcpp::Any visitVarlist(LuaParser::VarlistContext *context) {
-        _var__contex = Var_Context::VARLIST;
+        _var__context = Var_Context::VARLIST;
         std::vector<Types::Var> vars;
         for (LuaParser::Var_Context* ctx: context->var_()) {
             vars.push_back(visit(ctx).as<Types::Var>());
         }
 
-        _var__contex = Var_Context::OTHER;
+        _var__context = Var_Context::OTHER;
         return vars;
     }
 
@@ -1698,7 +1882,7 @@ public:
         } else if (context->getText() == "false") {
             return Types::Var::make(Types::Value::make_false());
         } else if (context->getText() == "...") {
-            return Types::Var::make(Types::Value::make_elipsis());
+            return Types::Var::make(_local_values.back()[current_block()]["..."]);
         } else if (LuaParser::NumberContext* ctx = context->number()) {
             return visit(ctx);
         } else if (LuaParser::StringContext* ctx = context->string()) {
@@ -1969,94 +2153,17 @@ public:
     }
 
     virtual antlrcpp::Any visitFunctioncall(LuaParser::FunctioncallContext *context) {
-        if (!context->varOrExp()->var_()) {
-            return nyi("Functioncall#1");
+        if (funcall_test_infrastructure(context)) {
+            return Types::Var::make(Types::Value::make_nil());
         }
 
-        LuaParser::Var_Context* var_context = context->varOrExp()->var_();
-        std::string funcname(var_context->NAME()->getText());
-
-        std::vector<std::string> allowed_names = {
-            "ensure_value_type",
-            "expect_failure",
-            "print",
-            "globals",
-            "locals",
-            "memory"
-        };
-
-        if (!std::any_of(allowed_names.begin(), allowed_names.end(), [funcname](const std::string& str) {
-            return funcname == str;
-        })) {
-            return nyi("Functioncall#2");
+        Types::Var call_source = visit(context->varOrExp()).as<Types::Var>();
+        std::vector<NameAndArgs> names_and_args;
+        for (LuaParser::NameAndArgsContext* ctx: context->nameAndArgs()) {
+            names_and_args.push_back(visit(ctx).as<NameAndArgs>());
         }
 
-        if (funcname == "ensure_value_type") {
-            std::string expression(context->nameAndArgs()[0]->args()->explist()->exp()[0]->getText());
-            Types::Var left = visit(context->nameAndArgs()[0]->args()->explist()->exp()[0]).as<Types::Var>();
-            Types::Var middle = visit(context->nameAndArgs()[0]->args()->explist()->exp()[1]).as<Types::Var>();
-            Types::Var right = visit(context->nameAndArgs()[0]->args()->explist()->exp()[2]).as<Types::Var>();
-
-            // Do not attempt to perform equality checks on reference types
-            if (!middle.is_refcounted() && left != middle) {
-                throw Exceptions::ValueEqualityExpected(expression, middle.value_as_string(), left.value_as_string());
-            }
-            std::string type(std::move(right.as<std::string>()));
-            if (type != "int" && type != "double" && type != "string" && type != "table" && type != "bool" && type != "nil") {
-                throw std::runtime_error("Invalid type in ensure_type " + type);
-            }
-
-            if ((type == "int" && !left.is<int>()) ||
-                (type == "double" && !left.is<double>()) ||
-                (type == "string" && !left.is<std::string>()) ||
-                (type == "table" && !left.is<Types::Table*>()) ||
-                (type == "bool" && !left.is<bool>()) ||
-                (type == "nil" && !left.is<Types::Nil>())) {
-                throw Exceptions::TypeEqualityExpected(expression, type, left.type_as_string());
-            }
-
-            // std::cout << "Expression " << expression << " has value " << left.value_as_string() << " of type " << left.type_as_string() << " (expected equivalent of " << middle.value_as_string() << " of type " << type << ") => OK" << std::endl;
-        } else if (funcname == "expect_failure") {
-            std::string expression(context->nameAndArgs()[0]->args()->explist()->exp()[0]->getText());
-            try {
-                Types::Var left = visit(context->nameAndArgs()[0]->args()->explist()->exp()[0]).as<Types::Var>();
-                throw std::runtime_error("Failure expected in expression " + expression);
-            } catch (Exceptions::BadTypeException& e) {
-                std::cout << "Expression " << expression << " rightfully triggered a type error" << std::endl;
-            } catch (std::exception& e) {
-                throw;
-            }
-        } else if (funcname == "print") {
-            Types::Var left = visit(context->nameAndArgs()[0]->args()->explist()->exp()[0]).as<Types::Var>();
-            std::cout << left.value_as_string() << std::endl;
-        } else if (funcname == "globals") {
-            std::cout << "Globals: " << std::endl;
-            for (ValueStore::value_type const& v: _global_values) {
-                std::cout << v.first << ": " << v.second.value_as_string() << std::endl;
-            }
-            std::cout << std::endl;
-        } else if (funcname == "locals") {
-            std::cout << "Locals (top block): " << std::endl;
-            for (ValueStore::value_type const& v: _local_values[current_block()]) {
-                std::cout << v.first << ": " << v.second.value_as_string() << std::endl;
-            }
-            std::cout << std::endl;
-        } else if (funcname == "memory") {
-            std::cout << "Globals: " << std::endl;
-            for (ValueStore::value_type const& v: _global_values) {
-                std::cout << "\t" << v.first << ": " << v.second.value_as_string() << std::endl;
-            }
-            std::cout << std::endl;
-
-            for (unsigned int i = 0; i < _blocks.size(); ++i) {
-                std::cout << "Locals (block " << i << "): " << std::endl;
-                for (ValueStore::value_type const& v: _local_values[_blocks[i]]) {
-                    std::cout << "\t" << v.first << ": " << v.second.value_as_string() << std::endl;
-                }
-            }
-        }
-
-        return Types::Var::make(Types::Value::make_nil());
+        return process_names_and_args(call_source, names_and_args);
     }
 
     virtual antlrcpp::Any visitVarOrExp(LuaParser::VarOrExpContext *context) {
@@ -2072,89 +2179,137 @@ public:
 
     virtual antlrcpp::Any visitVar_(LuaParser::Var_Context *context) {
         Types::Var result;
-        Types::Var suffix_start;
-        Types::Var expr;
-
         if (context->NAME()) {
             std::string name(context->NAME()->getText());
-            if (context->varSuffix().size() == 0) {
-                if (_var__contex == Var_Context::VARLIST) {
-                    std::pair<Types::Value*, Scope> value = lookup_name(name, false);
-                    if (!value.first) {
-                        _global_values[name] = Types::Value::_nil;
-                        result = Types::Var::make(&(_global_values[name]));
-                    } else {
-                        result = Types::Var::make(value.first);
-                    }
-                } else {
-                    // result = Types::Var::make(&(_global_values[context->NAME()->getText()]));
-                    result = Types::Var::make(lookup_name(name).first);
-                }
+            auto p = lookup_name(name, false); // Don't throw here
 
-                return result;
+            if (p.first) {
+                result = Types::Var::make(p.first);
             } else {
-                suffix_start = Types::Var::make(lookup_name(name).first);
+                if (_var__context == Var_Context::VARLIST) {
+                    Types::Value* new_value = new Types::Value();
+                    _global_values[name] = new_value;
+                    result = Types::Var::make(new_value);
+                } else {
+                    result = Types::Var::make(Types::Value::make_nil());
+                }
             }
         } else {
-            suffix_start = visit(context->exp()).as<Types::Var>();
+            result = visit(context->exp()).as<Types::Var>();
         }
 
         for (LuaParser::VarSuffixContext* ctx: context->varSuffix()) {
-            if (!suffix_start.has_dot()) {
-                throw Exceptions::BadDotAccess(suffix_start.type_as_string());
-            }
+            VarSuffix suffix = visit(ctx).as<VarSuffix>();
+            result = process_names_and_args(result, suffix._name_and_args);
 
-            Suffix suffix = visit(ctx).as<Suffix>();
-            if (is_error(suffix)) {
-                result = Types::Var::make(Types::var_error_t);
-                return result;
-            } else if (Subscript* subscript = std::get_if<Subscript>(&suffix)) {
-                suffix_start = Types::Var::make(&(suffix_start.subscript(subscript->_value.get())));
+            if (Subscript* subscript = std::get_if<Subscript>(&suffix._suffix)) {
+                if (!result.is<Types::Table*>()) {
+                    throw Exceptions::BadDotAccess(result.type_as_string());
+                }
+
+                result = Types::Var::make(&(result.as<Types::Table*>()->subscript(subscript->_value.get())));
+            } else if (std::string* str = std::get_if<std::string>(&suffix._suffix)) {
+                if (!result.is<Types::Table*>()) {
+                    throw Exceptions::BadDotAccess(result.type_as_string());
+                }
+
+                result = Types::Var::make(&(result.as<Types::Table*>()->dot(*str)));
             } else {
-                suffix_start = Types::Var::make(&(suffix_start.dot(std::get<std::string>(suffix))));
+                throw Exceptions::NilDot();
             }
         }
 
-        result = suffix_start;
         return result;
     }
 
     virtual antlrcpp::Any visitVarSuffix(LuaParser::VarSuffixContext *context) {
-        Suffix result;
-        if (context->nameAndArgs().size() != 0) {
-            std::cout << "Can't call function on table / userdata yet" << std::endl;
-            result = Types::var_error_t;
-        } else {
-            if (context->NAME()) {
-                result = context->NAME()->getText();
-            } else {
-                Subscript sub;
-                sub._value = visit(context->exp()).as<Types::Var>();
-                result = sub;
-            }
+        VarSuffix result;
+
+        for (unsigned int i = 0; i < context->nameAndArgs().size(); ++i) {
+            result._name_and_args.push_back(visit(context->nameAndArgs(i)).as<NameAndArgs>());
         }
 
+        if (context->NAME()) {
+            result._suffix = context->NAME()->getText();
+        } else {
+            Subscript sub;
+            sub._value = visit(context->exp()).as<Types::Var>();
+            result._suffix = sub;
+        }
         return result;
     }
 
     virtual antlrcpp::Any visitNameAndArgs(LuaParser::NameAndArgsContext *context) {
-        return nyi("NameAndArgs");
+        NameAndArgs res;
+        if (context->NAME()) {
+            res._name = context->NAME()->getText();
+        }
+
+        res._args = visit(context->args()).as<Args>();
+
+        return res;
     }
 
     virtual antlrcpp::Any visitArgs(LuaParser::ArgsContext *context) {
-        return nyi("Args");
+        Args args;
+
+        if (context->explist()) {
+            args = visit(context->explist()).as<std::vector<Types::Var>>();
+            std::vector<Types::Var>& values = std::get<std::vector<Types::Var>>(args);
+            Types::Var& last = values.back();
+
+            // Immediately expand the last argument if it is an elipsis or
+            // a list of values. This will help when processing arguments
+            // further down the road.
+            if (last.is<Types::Elipsis>()) {
+                std::vector<Types::Value*> const& remains = last.as<Types::Elipsis>().values();
+                for (Types::Value* value: remains) {
+                    values.push_back(Types::Var::make(value));
+                }
+            } else if (last.list()) {
+                std::vector<Types::Value> const& remains = last._list();
+                for (Types::Value const& value: remains) {
+                    values.push_back(Types::Var::make(value));
+                }
+            }
+        } else if (context->tableconstructor()) {
+            TableConstructor constructor;
+            constructor._var = visit(context->tableconstructor()).as<Types::Var>();
+            args = constructor;
+        } else {
+            String string;
+            string._var = visit(context->string()).as<Types::Var>();
+            args = string;
+        }
+
+        return args;
     }
 
     virtual antlrcpp::Any visitFunctiondef(LuaParser::FunctiondefContext *context) {
-        return nyi("Functiondef");
+        std::vector<std::string> names = visit(context->funcbody()).as<std::vector<std::string>>();
+        Types::Function* function = new Types::Function(std::move(names), context->funcbody()->block());
+        Types::Value v; v._type = function;
+        return Types::Var::make(v);
     }
 
     virtual antlrcpp::Any visitFuncbody(LuaParser::FuncbodyContext *context) {
-        return nyi("Funcbody");
+        return visit(context->parlist());
     }
 
     virtual antlrcpp::Any visitParlist(LuaParser::ParlistContext *context) {
-        return nyi("Parlist");
+        std::vector<std::string> names;
+        if (context->getText().starts_with("...")) {
+            names.push_back("...");
+        } else {
+            size_t n = context->getText().size();
+            std::vector<std::string> nl = visit(context->namelist()).as<std::vector<std::string>>();
+            std::ranges::for_each(nl, [&names](std::string const& name) { names.push_back(name);});
+            if (context->getText().substr(n - 4, std::string::npos) == "...") {
+                names.push_back("...");
+            }
+        }
+
+        return names;
     }
 
     virtual antlrcpp::Any visitTableconstructor(LuaParser::TableconstructorContext *context) {
@@ -2389,17 +2544,57 @@ private:
     enum class Scope {
         GLOBAL, // In the global scope (not local)
         LOCAL, // In the current block
-        DEPENDANT // Context dependant, for example in a previous block in the
-                  // same lexical scope
+        CLOSURE, // In a function's closure
     };
 
-    Var_Context _var__contex = Var_Context::OTHER;
+    Var_Context _var__context = Var_Context::OTHER;
+
+    struct TableConstructor {
+        Types::Var _var;
+    };
+
+    struct String {
+        Types::Var _var;
+    };
+
+
+    typedef std::variant<std::vector<Types::Var>, TableConstructor, String> Args;
+
+    class ArgsVisitor {
+    public:
+        ArgsVisitor(std::vector<Types::Value>& dest) : _dest(dest) { }
+
+        void operator()(std::vector<Types::Var> const& args) {
+            std::transform(args.begin(), args.end(), std::back_inserter(_dest), [](Types::Var const& var) { return var.get(); });
+        }
+
+        void operator()(TableConstructor const& cons) {
+            _dest.push_back(cons._var.get());
+        }
+
+        void operator()(String const& string) {
+            _dest.push_back(string._var.get());
+        }
+
+    private:
+        std::vector<Types::Value>& _dest;
+    };
+
+    struct NameAndArgs {
+        std::optional<std::string> _name = std::nullopt;
+        Args _args;
+    };
 
     struct Subscript {
         Types::Var _value;
     };
 
     typedef std::variant<Subscript, std::string, Types::VarError> Suffix;
+
+    struct VarSuffix {
+        std::vector<NameAndArgs> _name_and_args;
+        Suffix _suffix;
+    };
 
     template<typename... Args>
     constexpr bool is_error(std::variant<Args...> const& a) {
@@ -2414,16 +2609,36 @@ private:
             v.morph();
         }
 
-        for (unsigned int i = 0; i < vars.size(); ++i) {
+        for (unsigned int i = 0; i < std::min(vars.size(), exprs.size()); ++i) {
             if (!vars[i].lvalue()) {
                 throw std::runtime_error("How the hell did you arrive here ?");
             }
 
-            if (i >= exprs.size()) {
-                vars[i]._lvalue()->value() = Types::Nil();
-                continue;
-            }
             vars[i]._lvalue()->value() = exprs[i].get().value();
+        }
+
+        // Adjust for elipsis / value list
+        if (exprs.size() < vars.size()) {
+            Types::Var& last = exprs.back();
+            unsigned int i = exprs.size();
+
+            if (last.is<Types::Elipsis>() || last.list()) {
+                if (last.is<Types::Elipsis>()) {
+                    std::vector<Types::Value*> remains = last.as<Types::Elipsis>().values();
+                    for (unsigned int j = 0; j < remains.size() && i < vars.size(); ++i, ++j) {
+                        vars[i]._lvalue()->value() = remains[j]->value();
+                    }
+                } else {
+                    std::vector<Types::Value> remains(std::move(last._list()));
+                    for (unsigned int j = 0; j < remains.size() && i < vars.size(); ++i, ++j) {
+                        vars[i]._lvalue()->value() = remains[j].value();
+                    }
+                }
+            }
+
+            for (; i < vars.size(); ++i) {
+                vars[i]._lvalue()->value() = Types::Nil();
+            }
         }
     }
 
@@ -2502,8 +2717,9 @@ private:
             }
 
             std::string name(ctx->NAME()->getText());
-            _local_values[ctx->block(0)][name] = counter;
-            Types::Value& value = _local_values[ctx->block(0)][name];
+            _local_values.back()[ctx->block(0)][name] = new Types::Value();
+            Types::Value* value = _local_values.back()[ctx->block(0)][name];
+            value->value() = counter.value();
 
             Types::Value increment;
             if (ctx->exp().size() == 3) {
@@ -2517,8 +2733,8 @@ private:
             }
 
             if (increment.is<double>()) {
-                if (value.is<int>()) {
-                    value.value() = (double)value.as<int>();
+                if (value->is<int>()) {
+                    value->value() = (double)value->as<int>();
                 }
 
                 if (counter.is<int>()) {
@@ -2527,9 +2743,9 @@ private:
             }
 
             _blocks.push_back(ctx->block(0));
-            if (value.is<int>()) {
-                for (; value.as<int>() <= limit.as_double_weak();
-                     value.value() = counter.as<int>() + (int)increment.as_double_weak(),
+            if (value->is<int>()) {
+                for (; value->as<int>() <= limit.as_double_weak();
+                     value->value() = counter.as<int>() + (int)increment.as_double_weak(),
                      counter.value() = counter.as<int>() + (int)increment.as_double_weak()) {
                     _coming_from_for = true;
                     visit(ctx->block()[0]);
@@ -2539,41 +2755,43 @@ private:
                     // it does retain its value between iterations. Well...
                     // Not exactly, its value does get "reset", but we do not
                     // remove it from the map because it is easier this way.
-                    auto iter = _local_values[ctx->block(0)].begin();
-                    while (iter != _local_values[ctx->block(0)].end()) {
+                    auto iter = _local_values.back()[ctx->block(0)].begin();
+                    while (iter != _local_values.back()[ctx->block(0)].end()) {
                         if (iter->first == name) {
                             ++iter;
                         } else {
-                            iter = _local_values[ctx->block(0)].erase(iter);
+                            iter->second->remove_reference();
+                            iter = _local_values.back()[ctx->block(0)].erase(iter);
                         }
                     }
                 }
             } else {
-                for (; value.as<double>() <= limit.as_double_weak();
-                     value.value() = counter.as<double>() + increment.as_double_weak(),
+                for (; value->as<double>() <= limit.as_double_weak();
+                     value->value() = counter.as<double>() + increment.as_double_weak(),
                      counter.value() = counter.as<double>() + increment.as_double_weak()) {
                     _coming_from_for = true;
                     visit(ctx->block()[0]);
-                    auto iter = _local_values[ctx->block(0)].begin();
-                    while (iter != _local_values[ctx->block(0)].end()) {
+                    auto iter = _local_values.back()[ctx->block(0)].begin();
+                    while (iter != _local_values.back()[ctx->block(0)].end()) {
                         if (iter->first == name) {
                             ++iter;
                         } else {
-                            iter = _local_values[ctx->block(0)].erase(iter);
+                            iter->second->remove_reference();
+                            iter = _local_values.back()[ctx->block(0)].erase(iter);
                         }
                     }
                 }
             }
             _blocks.pop_back();
-            _local_values.erase(ctx->block(0));
+            erase_block(ctx->block(0));
 
         } catch (Exceptions::Break& brk) {
             stabilize_blocks(current);
         }
     }
 
-    void process_function(LuaParser::FuncnameContext* name, LuaParser::FuncbodyContext* body) {
-
+    void process_function(LuaParser::FuncnameContext* name, LuaParser::FuncbodyContext*) {
+        visit(name);
     }
 
     void process_local_variables(LuaParser::AttnamelistContext* al, LuaParser::ExplistContext* el) {
@@ -2586,27 +2804,57 @@ private:
             values.resize(names.size(), Types::Var::make(Types::Value::make_nil()));
         }
 
-        auto names_iter = names.begin();
-        auto values_iter = values.begin();
-
-        for (; names_iter != names.end() && values_iter != values.end(); ++names_iter, ++values_iter) {
+        for (unsigned int i = 0; i < std::min(names.size(), values.size()); ++i) {
             // Apparently Lua allows local a = 12; local a = 12...
-            /* if (_local_values.top().find(*names_iter) != _local_values.top().end()) {
-                throw Exceptions::NameAlreadyUsedException(*names_iter);
-            } */
+            auto it = _local_values.back()[current_block()].find(names[i]);
+            if (it == _local_values.back()[current_block()].end()) {
+                _local_values.back()[current_block()][names[i]] = new Types::Value();
+            }
 
-            _local_values[current_block()][*names_iter] = values_iter->get();
+            _local_values.back()[current_block()][names[i]]->value() = values[i].get().value();
         }
 
-        if (names_iter != names.end()) {
-            for (; names_iter != names.end(); ++names_iter) {
-                _local_values[current_block()][*names_iter] = Types::Value::_nil;
+        // Adjust
+        if (values.size() < names.size()) {
+            Types::Var& last = values.back();
+            unsigned int i = values.size();
+
+            if (last.is<Types::Elipsis>() || last.list()) {
+                if (last.is<Types::Elipsis>()) {
+                    std::vector<Types::Value*> remains = last.as<Types::Elipsis>().values();
+                    for (unsigned int j = 0; j < remains.size() && i < names.size(); ++i, ++j) {
+                        auto it = _local_values.back()[current_block()].find(names[i]);
+                        if (it == _local_values.back()[current_block()].end()) {
+                            _local_values.back()[current_block()][names[i]] = new Types::Value();
+                        }
+
+                        _local_values.back()[current_block()][names[i]]->value() = remains[j]->value();
+                    }
+                } else {
+                    std::vector<Types::Value> remains(std::move(last._list()));
+                    for (unsigned int j = 0; j < remains.size() && i < names.size(); ++i, ++j) {
+                        auto it = _local_values.back()[current_block()].find(names[i]);
+                        if (it == _local_values.back()[current_block()].end()) {
+                            _local_values.back()[current_block()][names[i]] = new Types::Value();
+                        }
+
+                        _local_values.back()[current_block()][names[i]]->value() = remains[j].value();
+                    }
+                }
+            }
+
+            for (; i < names.size(); ++i) {
+                _local_values.back()[current_block()][names[i]] = new Types::Value();
             }
         }
     }
 
     void process_local_function(std::string const& name, LuaParser::FuncbodyContext* body) {
-
+        Types::Function* f = new Types::Function(std::move(visit(body->parlist()).as<std::vector<std::string>>()), body->block());
+        close_function(f, body->block());
+        Types::Value* value = new Types::Value;
+        value->_type = f;
+        _local_values.back()[current_block()][name] = value;
     }
 
     Types::Var nyi(std::string const& str) {
@@ -2615,33 +2863,28 @@ private:
     }
 
     std::pair<Types::Value*, Scope> lookup_name(std::string const& name, bool should_throw = true) {
-        /*auto local_iter = _local_values.back().find(name);
-        if (local_iter == _local_values.back().end()) {
-            auto global_iter = _global_values.find(name);
-            if (global_iter == _global_values.end()) {
-                if (should_throw) {
-                    throw Exceptions::NilDot();
-                } else {
-                    return std::make_pair(nullptr, Scope::GLOBAL);
-                }
-            } else {
-                return std::make_pair(&(global_iter->second), Scope::GLOBAL);
-            }
-        } else {
-            return std::make_pair(&(local_iter->second), Scope::LOCAL);
-        } */
         Scope scope;
 
-        auto range = _listener.get_context_for_local(current_block(), name);
+        auto contexts = _listener.get_context_for_local(current_block(), name);
         Types::Value* candidate;
         bool found = false;
-        for (auto it = range.first; it != range.second; ++it) {
+        for (auto it = contexts.first; it != contexts.second; ++it) {
             LuaParser::BlockContext* ctx = it->second;
-            auto value_it = _local_values[ctx].find(name);
-            if (value_it != _local_values[ctx].end()) {
-                candidate = &(value_it->second);
+            auto value_it = _local_values.back()[ctx].find(name);
+            if (value_it != _local_values.back()[ctx].end()) {
+                candidate = value_it->second;
                 scope = Scope::LOCAL;
                 found = true;
+            }
+        }
+
+        if (!found) {
+            if (Types::Function* function = current_function()) {
+                auto const& closure = function->closure();
+                auto it = closure.find(name);
+                if (it != closure.end()) {
+                    return std::make_pair(it->second, Scope::CLOSURE);
+                }
             }
         }
 
@@ -2654,7 +2897,7 @@ private:
                 }
                 candidate = nullptr;
             } else {
-                candidate = &(_global_values[name]);
+                candidate = _global_values[name];
             }
         }
 
@@ -2669,6 +2912,14 @@ private:
         }
     }
 
+    Types::Function* current_function() {
+        if (_functions.empty()) {
+            return nullptr;
+        } else {
+            return _functions.back();
+        }
+    }
+
     void stabilize_blocks(LuaParser::BlockContext* context) {
         if (_blocks.back() != context) {
             size_t n = _blocks.size() - 1;
@@ -2677,7 +2928,7 @@ private:
             }
 
             for (unsigned int j = n; j < _blocks.size(); ++j) {
-                _local_values.erase(_blocks[j]);
+                erase_block(_blocks[j]);
             }
 
             _blocks.resize(n + 1);
@@ -2687,19 +2938,234 @@ private:
         }
     }
 
-    typedef std::map<std::string, Types::Value> ValueStore;
+    void erase_block(LuaParser::BlockContext* context) {
+        clear_block(context);
+        _local_values.back().erase(context);
+    }
+
+    void clear_block(LuaParser::BlockContext* context) {
+        auto& data = _local_values.back()[context];
+        for (auto& p: data) {
+            p.second->remove_reference();
+        }
+    }
+
+    void close_function(Types::Function* function, LuaParser::BlockContext* body) {
+        auto pair = _listener.get_parents_of_function(body);
+        for (auto it = pair.first; it != pair.second; ++it) {
+            auto& store = _local_values.back()[it->second];
+            for (auto& p: store) {
+                function->close(p.first, p.second);
+            }
+        }
+    }
+
+    std::vector<Types::Var> call_function(Types::Function* function, std::vector<Types::Value> const& values) {
+        LuaParser::BlockContext* ctx = function->get_context();
+        LuaParser::BlockContext* current_block = this->current_block();
+
+        _blocks.push_back(ctx);
+        _local_values.push_back(decltype(_local_values)::value_type());
+        /* for (auto& p: function->closure()) {
+            _local_values.back()[p.first] = p.second;
+        } */
+        _functions.push_back(function);
+
+
+        unsigned int i = 0;
+        for (; i < std::min(values.size(), function->formal_parameters().size()); ++i) {
+            Types::Value* value = new Types::Value();
+            value->value() = values[i].value();
+            _local_values.back()[ctx][function->formal_parameters()[i]] = value;
+        }
+
+        // Adjust if necessary. If not enough arguments provided, fill with nil.
+        // If too many arguments, send the rest as an elipsis if the function
+        // has an elipsis as parameter; otherwise discard the rest.
+        if (i < function->formal_parameters().size()) {
+            for (; i < function->formal_parameters().size(); ++i) {
+                _local_values.back()[ctx][function->formal_parameters()[i]] = new Types::Value();
+            }
+        } else if (i < values.size()) {
+            if (function->formal_parameters().back() == "...") {
+                Types::Value* elipsis = new Types::Value();
+                std::vector<Types::Value*> elipsis_values;
+                for (; i < values.size(); ++i) {
+                    Types::Value* value = new Types::Value();
+                    value->value() = values[i].value();
+                    elipsis_values.push_back(value);
+                }
+                elipsis->value() = Types::Elipsis(elipsis_values);
+                _local_values.back()[ctx]["..."] = elipsis;
+            }
+        }
+
+        _coming_from_funcall = true;
+        try {
+            visit(ctx);
+            _functions.pop_back();
+            return std::vector<Types::Var>();
+        } catch (Exceptions::Return& e) {
+            // If control flow is disrupted by a return statement, blocks may
+            // not be in a coherent state. Stabilize them only in this case.
+            stabilize_blocks(current_block);
+            _functions.pop_back();
+            return e.get();
+        }
+    }
+
+    bool funcall_test_infrastructure(LuaParser::FunctioncallContext* context) {
+        if (!context->varOrExp()->var_()) {
+            return false;
+        }
+
+        LuaParser::Var_Context* var_context = context->varOrExp()->var_();
+        std::string funcname(var_context->NAME()->getText());
+
+        std::vector<std::string> allowed_names = {
+            "ensure_value_type",
+            "expect_failure",
+            "print",
+            "globals",
+            "locals",
+            "memory"
+        };
+
+        if (!std::any_of(allowed_names.begin(), allowed_names.end(), [funcname](const std::string& str) {
+            return funcname == str;
+        })) {
+            return false;
+        }
+
+        if (funcname == "ensure_value_type") {
+            std::string expression(context->nameAndArgs()[0]->args()->explist()->exp()[0]->getText());
+            Types::Var left = visit(context->nameAndArgs()[0]->args()->explist()->exp()[0]).as<Types::Var>();
+            Types::Var middle = visit(context->nameAndArgs()[0]->args()->explist()->exp()[1]).as<Types::Var>();
+            Types::Var right = visit(context->nameAndArgs()[0]->args()->explist()->exp()[2]).as<Types::Var>();
+
+            // Do not attempt to perform equality checks on reference types
+            if (!middle.is_refcounted() && left != middle) {
+                throw Exceptions::ValueEqualityExpected(expression, middle.value_as_string(), left.value_as_string());
+            }
+            std::string type(std::move(right.as<std::string>()));
+            if (type != "int" && type != "double" && type != "string" && type != "table" && type != "bool" && type != "nil") {
+                throw std::runtime_error("Invalid type in ensure_type " + type);
+            }
+
+            if ((type == "int" && !left.is<int>()) ||
+                (type == "double" && !left.is<double>()) ||
+                (type == "string" && !left.is<std::string>()) ||
+                (type == "table" && !left.is<Types::Table*>()) ||
+                (type == "bool" && !left.is<bool>()) ||
+                (type == "nil" && !left.is<Types::Nil>())) {
+                throw Exceptions::TypeEqualityExpected(expression, type, left.type_as_string());
+            }
+
+            // std::cout << "Expression " << expression << " has value " << left.value_as_string() << " of type " << left.type_as_string() << " (expected equivalent of " << middle.value_as_string() << " of type " << type << ") => OK" << std::endl;
+        } else if (funcname == "expect_failure") {
+            std::string expression(context->nameAndArgs()[0]->args()->explist()->exp()[0]->getText());
+            try {
+                Types::Var left = visit(context->nameAndArgs()[0]->args()->explist()->exp()[0]).as<Types::Var>();
+                throw std::runtime_error("Failure expected in expression " + expression);
+            } catch (Exceptions::BadTypeException& e) {
+                std::cout << "Expression " << expression << " rightfully triggered a type error" << std::endl;
+            } catch (std::exception& e) {
+                throw;
+            }
+        } else if (funcname == "print") {
+            Types::Var left = visit(context->nameAndArgs()[0]->args()->explist()->exp()[0]).as<Types::Var>();
+            std::cout << left.value_as_string() << std::endl;
+        } else if (funcname == "globals") {
+            std::cout << "Globals: " << std::endl;
+            for (ValueStore::value_type const& v: _global_values) {
+                std::cout << v.first << ": " << v.second->value_as_string() << std::endl;
+            }
+            std::cout << std::endl;
+        } else if (funcname == "locals") {
+            std::cout << "Locals (top block): " << std::endl;
+            for (ValueStore::value_type const& v: _local_values.back()[current_block()]) {
+                std::cout << v.first << ": " << v.second->value_as_string() << std::endl;
+            }
+            std::cout << std::endl;
+        } else if (funcname == "memory") {
+            std::cout << "Globals: " << std::endl;
+            for (ValueStore::value_type const& v: _global_values) {
+                std::cout << "\t" << v.first << ": " << v.second->value_as_string() << std::endl;
+            }
+            std::cout << std::endl;
+
+            for (unsigned int j = 0; j < _local_values.size(); ++j) {
+                std::cout << "Locals (Frame " << j << "): " << std::endl;
+                for (unsigned int i = 0; i < _blocks.size(); ++i) {
+                    std::cout << "\tBlock " << i << std::endl;
+                    for (ValueStore::value_type const& v: _local_values[j][_blocks[i]]) {
+                        std::cout << "\t\t" << v.first << ": " << v.second->value_as_string() << std::endl;
+                    }
+                }
+            }
+        } else {
+            return false;
+        }
+
+        return true;
+    }
+
+    Types::Var process_names_and_args(Types::Var const& src, std::vector<NameAndArgs> const& names_and_args) {
+        Types::Var result = src;
+        for (NameAndArgs const& name_and_args: names_and_args) {
+            Types::Function* function;
+            if (name_and_args._name) {
+                if (!result.is<Types::Table*>()) {
+                    throw Exceptions::BadDotAccess(result.type_as_string());
+                }
+
+                Types::Value& fn = result.as<Types::Table*>()->dot(*name_and_args._name);
+                if (!fn.is<Types::Function*>()) {
+                    throw Exceptions::BadCall(fn.type_as_string());
+                }
+
+                function = fn.as<Types::Function*>();
+            } else {
+                if (!result.is<Types::Function*>()) {
+                    throw Exceptions::BadCall(result.type_as_string());
+                }
+
+                function = result.as<Types::Function*>();
+            }
+
+            std::vector<Types::Value> arguments;
+            // Push the table as argument if using the ':' notation.
+            if (name_and_args._name) {
+                arguments.push_back(result.get());
+            }
+            std::visit(ArgsVisitor(arguments), name_and_args._args);
+
+            std::vector<Types::Var> results = call_function(function, arguments);
+            if (results.size() == 0) {
+                result = Types::Var::make(Types::Value::make_nil());
+            } else {
+                result = results[0];
+            }
+        }
+
+        return result;
+    }
+
+    typedef std::map<std::string, Types::Value*> ValueStore;
 
     // Scope processing works like a stack. Each time a new scope is
     // entered, push a new map on top of the stack to store the local
     // Values of the scope. Once the scope is exited, pop this map from
     // the stack.
-    std::map<LuaParser::BlockContext*, ValueStore> _local_values;
+    std::vector<std::map<LuaParser::BlockContext*, ValueStore>> _local_values;
     ValueStore _global_values;
 
     GotoBreakListener _listener;
 
     std::vector<LuaParser::BlockContext*> _blocks;
+    std::vector<Types::Function*> _functions;
     bool _coming_from_for = false;
+    bool _coming_from_funcall = false;
 };
 
 class FailureExpected : public std::exception {
@@ -2921,12 +3387,12 @@ int main(int argc, char** argv) {
         antlr4::tree::ParseTree* tree = parser.chunk();
         std::cout << tree->toStringTree(&parser, true) << std::endl;
 
-        try {
+        /* try {
             MyLuaVisitor visitor(tree);
             visitor.visit(tree);
         } catch (std::exception& e) {
             std::cerr << "Parse base error: " << e.what() << std::endl;
-        }
+        } */
     }
 
     if (args._goto_break) {
