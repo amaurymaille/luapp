@@ -27,12 +27,12 @@
 #include "syntactic_analyzer.h"
 #include "types.h"
 
-MyLuaVisitor::MyLuaVisitor(antlr4::tree::ParseTree* tree) {
+Interpreter::Interpreter(antlr4::tree::ParseTree* tree) {
     antlr4::tree::ParseTreeWalker::DEFAULT.walk(&_listener, tree);
     _listener.validate_gotos();
 }
 
-MyLuaVisitor::~MyLuaVisitor() {
+Interpreter::~Interpreter() {
     for (auto& p: _global_values) {
         p.second->remove_reference();
     }
@@ -46,7 +46,7 @@ MyLuaVisitor::~MyLuaVisitor() {
     }
 }
 
-antlrcpp::Any MyLuaVisitor::visitChunk(LuaParser::ChunkContext *context) {
+antlrcpp::Any Interpreter::visitChunk(LuaParser::ChunkContext *context) {
     // std::cout << "Chunk: " << context->getText() << std::endl;
     try {
         _local_values.push_back(decltype(_local_values)::value_type());
@@ -56,7 +56,7 @@ antlrcpp::Any MyLuaVisitor::visitChunk(LuaParser::ChunkContext *context) {
     }
 }
 
-antlrcpp::Any MyLuaVisitor::visitBlock(LuaParser::BlockContext *context) {
+antlrcpp::Any Interpreter::visitBlock(LuaParser::BlockContext *context) {
     bool coming_from_for = _coming_from_for;
     bool coming_from_funcall = _coming_from_funcall;
 
@@ -114,7 +114,7 @@ antlrcpp::Any MyLuaVisitor::visitBlock(LuaParser::BlockContext *context) {
     return retval;
 }
 
-antlrcpp::Any MyLuaVisitor::visitStat(LuaParser::StatContext *context) {
+antlrcpp::Any Interpreter::visitStat(LuaParser::StatContext *context) {
     // std::cout << "Stat: " << context->getText() << std::endl;
     if (context->getText() == ";") {
         ;
@@ -157,7 +157,7 @@ antlrcpp::Any MyLuaVisitor::visitStat(LuaParser::StatContext *context) {
     return Types::Var::make(Types::Value::make_nil());
 }
 
-antlrcpp::Any MyLuaVisitor::visitAttnamelist(LuaParser::AttnamelistContext *context) {
+antlrcpp::Any Interpreter::visitAttnamelist(LuaParser::AttnamelistContext *context) {
     std::vector<antlr4::tree::TerminalNode*> names = context->NAME();
     std::vector<std::string> result;
     std::transform(names.cbegin(), names.cend(), std::back_inserter(result), [](antlr4::tree::TerminalNode* node) {
@@ -166,12 +166,12 @@ antlrcpp::Any MyLuaVisitor::visitAttnamelist(LuaParser::AttnamelistContext *cont
     return result;
 }
 
-antlrcpp::Any MyLuaVisitor::visitAttrib(LuaParser::AttribContext *) {
+antlrcpp::Any Interpreter::visitAttrib(LuaParser::AttribContext *) {
     std::cerr << "Attributes are not supported" << std::endl;
     return Types::Var::make(Types::Value::make_nil());
 }
 
-antlrcpp::Any MyLuaVisitor::visitRetstat(LuaParser::RetstatContext *context) {
+antlrcpp::Any Interpreter::visitRetstat(LuaParser::RetstatContext *context) {
     std::vector<Types::Var> retval;
     if (LuaParser::ExplistContext* ctx = context->explist()) {
         retval = visit(ctx).as<std::vector<Types::Var>>();
@@ -184,11 +184,11 @@ antlrcpp::Any MyLuaVisitor::visitRetstat(LuaParser::RetstatContext *context) {
     throw Exceptions::Return(std::move(retval));
 }
 
-antlrcpp::Any MyLuaVisitor::visitLabel(LuaParser::LabelContext *) {
+antlrcpp::Any Interpreter::visitLabel(LuaParser::LabelContext *) {
     return Types::Var::make(Types::Value::make_nil());
 }
 
-antlrcpp::Any MyLuaVisitor::visitFuncname(LuaParser::FuncnameContext *context) {
+antlrcpp::Any Interpreter::visitFuncname(LuaParser::FuncnameContext *context) {
     std::string full_name(context->getText());
     std::string last_part;
     std::vector<antlr4::tree::TerminalNode*> names(context->NAME());
@@ -242,7 +242,7 @@ antlrcpp::Any MyLuaVisitor::visitFuncname(LuaParser::FuncnameContext *context) {
     return Types::Var::make(Types::Value::make_nil());
 }
 
-antlrcpp::Any MyLuaVisitor::visitVarlist(LuaParser::VarlistContext *context) {
+antlrcpp::Any Interpreter::visitVarlist(LuaParser::VarlistContext *context) {
     _var__context = Var_Context::VARLIST;
     std::vector<Types::Var> vars;
     for (LuaParser::Var_Context* ctx: context->var_()) {
@@ -253,7 +253,7 @@ antlrcpp::Any MyLuaVisitor::visitVarlist(LuaParser::VarlistContext *context) {
     return vars;
 }
 
-antlrcpp::Any MyLuaVisitor::visitNamelist(LuaParser::NamelistContext *context) {
+antlrcpp::Any Interpreter::visitNamelist(LuaParser::NamelistContext *context) {
     std::vector<antlr4::tree::TerminalNode*> names(context->NAME());
     std::vector<std::string> retval;
 
@@ -262,7 +262,7 @@ antlrcpp::Any MyLuaVisitor::visitNamelist(LuaParser::NamelistContext *context) {
     return retval;
 }
 
-antlrcpp::Any MyLuaVisitor::visitExplist(LuaParser::ExplistContext *context) {
+antlrcpp::Any Interpreter::visitExplist(LuaParser::ExplistContext *context) {
     std::vector<Types::Var> values;
     for (LuaParser::ExpContext* ctx: context->exp()) {
         values.push_back(visit(ctx).as<Types::Var>());
@@ -271,7 +271,7 @@ antlrcpp::Any MyLuaVisitor::visitExplist(LuaParser::ExplistContext *context) {
     return values;
 }
 
-antlrcpp::Any MyLuaVisitor::visitExp(LuaParser::ExpContext *context) {
+antlrcpp::Any Interpreter::visitExp(LuaParser::ExpContext *context) {
     if (context->getText() == "nil") {
         return Types::Var::make(Types::Value::make_nil());
     } else if (context->getText() == "true") {
@@ -544,7 +544,7 @@ antlrcpp::Any MyLuaVisitor::visitExp(LuaParser::ExpContext *context) {
     }
 }
 
-antlrcpp::Any MyLuaVisitor::visitPrefixexp(LuaParser::PrefixexpContext *context) {
+antlrcpp::Any Interpreter::visitPrefixexp(LuaParser::PrefixexpContext *context) {
     Types::Var val = visit(context->varOrExp()).as<Types::Var>();
     std::vector<NameAndArgs> names_and_args;
     for (LuaParser::NameAndArgsContext* ctx: context->nameAndArgs()) {
@@ -554,7 +554,7 @@ antlrcpp::Any MyLuaVisitor::visitPrefixexp(LuaParser::PrefixexpContext *context)
     return process_names_and_args(val, names_and_args);
 }
 
-antlrcpp::Any MyLuaVisitor::visitFunctioncall(LuaParser::FunctioncallContext *context) {
+antlrcpp::Any Interpreter::visitFunctioncall(LuaParser::FunctioncallContext *context) {
     if (funcall_test_infrastructure(context)) {
         return Types::Var::make(Types::Value::make_nil());
     }
@@ -568,7 +568,7 @@ antlrcpp::Any MyLuaVisitor::visitFunctioncall(LuaParser::FunctioncallContext *co
     return process_names_and_args(call_source, names_and_args);
 }
 
-antlrcpp::Any MyLuaVisitor::visitVarOrExp(LuaParser::VarOrExpContext *context) {
+antlrcpp::Any Interpreter::visitVarOrExp(LuaParser::VarOrExpContext *context) {
     Types::Var result;
     if (context->var_()) {
         result = visit(context->var_()).as<Types::Var>();
@@ -579,7 +579,7 @@ antlrcpp::Any MyLuaVisitor::visitVarOrExp(LuaParser::VarOrExpContext *context) {
     return result;
 }
 
-antlrcpp::Any MyLuaVisitor::visitVar_(LuaParser::Var_Context *context) {
+antlrcpp::Any Interpreter::visitVar_(LuaParser::Var_Context *context) {
     Types::Var result;
     if (context->NAME()) {
         std::string name(context->NAME()->getText());
@@ -630,7 +630,7 @@ antlrcpp::Any MyLuaVisitor::visitVar_(LuaParser::Var_Context *context) {
     return result;
 }
 
-antlrcpp::Any MyLuaVisitor::visitVarSuffix(LuaParser::VarSuffixContext *context) {
+antlrcpp::Any Interpreter::visitVarSuffix(LuaParser::VarSuffixContext *context) {
     VarSuffix result;
 
     for (unsigned int i = 0; i < context->nameAndArgs().size(); ++i) {
@@ -647,7 +647,7 @@ antlrcpp::Any MyLuaVisitor::visitVarSuffix(LuaParser::VarSuffixContext *context)
     return result;
 }
 
-antlrcpp::Any MyLuaVisitor::visitNameAndArgs(LuaParser::NameAndArgsContext *context) {
+antlrcpp::Any Interpreter::visitNameAndArgs(LuaParser::NameAndArgsContext *context) {
     NameAndArgs res;
     if (context->NAME()) {
         res._name = context->NAME()->getText();
@@ -658,7 +658,7 @@ antlrcpp::Any MyLuaVisitor::visitNameAndArgs(LuaParser::NameAndArgsContext *cont
     return res;
 }
 
-antlrcpp::Any MyLuaVisitor::visitArgs(LuaParser::ArgsContext *context) {
+antlrcpp::Any Interpreter::visitArgs(LuaParser::ArgsContext *context) {
     Args args;
 
     if (context->explist()) {
@@ -694,7 +694,7 @@ antlrcpp::Any MyLuaVisitor::visitArgs(LuaParser::ArgsContext *context) {
     return args;
 }
 
-antlrcpp::Any MyLuaVisitor::visitFunctiondef(LuaParser::FunctiondefContext *context) {
+antlrcpp::Any Interpreter::visitFunctiondef(LuaParser::FunctiondefContext *context) {
     std::vector<std::string> names = visit(context->funcbody()).as<std::vector<std::string>>();
     Types::Function* function = new Types::Function(std::move(names), context->funcbody()->block());
     close_function(function, context->funcbody()->block());
@@ -703,7 +703,7 @@ antlrcpp::Any MyLuaVisitor::visitFunctiondef(LuaParser::FunctiondefContext *cont
     return Types::Var::make(v);
 }
 
-antlrcpp::Any MyLuaVisitor::visitFuncbody(LuaParser::FuncbodyContext *context) {
+antlrcpp::Any Interpreter::visitFuncbody(LuaParser::FuncbodyContext *context) {
     if (LuaParser::ParlistContext* ctx = context->parlist()) {
         return visit(ctx);
     } else {
@@ -711,7 +711,7 @@ antlrcpp::Any MyLuaVisitor::visitFuncbody(LuaParser::FuncbodyContext *context) {
     }
 }
 
-antlrcpp::Any MyLuaVisitor::visitParlist(LuaParser::ParlistContext *context) {
+antlrcpp::Any Interpreter::visitParlist(LuaParser::ParlistContext *context) {
     std::vector<std::string> names;
     if (context->getText().starts_with("...")) {
         names.push_back("...");
@@ -730,7 +730,7 @@ antlrcpp::Any MyLuaVisitor::visitParlist(LuaParser::ParlistContext *context) {
     return names;
 }
 
-antlrcpp::Any MyLuaVisitor::visitTableconstructor(LuaParser::TableconstructorContext *context) {
+antlrcpp::Any Interpreter::visitTableconstructor(LuaParser::TableconstructorContext *context) {
     std::list<std::pair<Types::Value, Types::Value>> values;
 
     if (LuaParser::FieldlistContext* ctx = context->fieldlist()) {
@@ -740,7 +740,7 @@ antlrcpp::Any MyLuaVisitor::visitTableconstructor(LuaParser::TableconstructorCon
     return Types::Var::make(Types::Value::make_table(values));
 }
 
-antlrcpp::Any MyLuaVisitor::visitFieldlist(LuaParser::FieldlistContext *context) {
+antlrcpp::Any Interpreter::visitFieldlist(LuaParser::FieldlistContext *context) {
     std::list<std::pair<Types::Value, Types::Value>> values;
     unsigned int index = 1;
     for (LuaParser::FieldContext* ctx: context->field()) {
@@ -767,7 +767,7 @@ antlrcpp::Any MyLuaVisitor::visitFieldlist(LuaParser::FieldlistContext *context)
     return values;
 }
 
-antlrcpp::Any MyLuaVisitor::visitField(LuaParser::FieldContext *context) {
+antlrcpp::Any Interpreter::visitField(LuaParser::FieldContext *context) {
     std::string text(context->getText());
 
     if (text.starts_with("[")) {
@@ -780,19 +780,19 @@ antlrcpp::Any MyLuaVisitor::visitField(LuaParser::FieldContext *context) {
     }
 }
 
-antlrcpp::Any MyLuaVisitor::visitFieldsep(LuaParser::FieldsepContext *) {
+antlrcpp::Any Interpreter::visitFieldsep(LuaParser::FieldsepContext *) {
     return nullptr;
 }
 
-antlrcpp::Any MyLuaVisitor::visitOperatorOr(LuaParser::OperatorOrContext *) {
+antlrcpp::Any Interpreter::visitOperatorOr(LuaParser::OperatorOrContext *) {
     return nullptr;
 }
 
-antlrcpp::Any MyLuaVisitor::visitOperatorAnd(LuaParser::OperatorAndContext *) {
+antlrcpp::Any Interpreter::visitOperatorAnd(LuaParser::OperatorAndContext *) {
     return nullptr;
 }
 
-antlrcpp::Any MyLuaVisitor::visitOperatorComparison(LuaParser::OperatorComparisonContext *context) {
+antlrcpp::Any Interpreter::visitOperatorComparison(LuaParser::OperatorComparisonContext *context) {
     std::string symbol(context->getText());
 
     if (symbol == "<") {
@@ -812,11 +812,11 @@ antlrcpp::Any MyLuaVisitor::visitOperatorComparison(LuaParser::OperatorCompariso
     }
 }
 
-antlrcpp::Any MyLuaVisitor::visitOperatorStrcat(LuaParser::OperatorStrcatContext *) {
+antlrcpp::Any Interpreter::visitOperatorStrcat(LuaParser::OperatorStrcatContext *) {
     return nullptr;
 }
 
-antlrcpp::Any MyLuaVisitor::visitOperatorAddSub(LuaParser::OperatorAddSubContext *context) {
+antlrcpp::Any Interpreter::visitOperatorAddSub(LuaParser::OperatorAddSubContext *context) {
     std::string symbol(context->getText());
 
     if (symbol == "+") {
@@ -828,7 +828,7 @@ antlrcpp::Any MyLuaVisitor::visitOperatorAddSub(LuaParser::OperatorAddSubContext
     }
 }
 
-antlrcpp::Any MyLuaVisitor::visitOperatorMulDivMod(LuaParser::OperatorMulDivModContext *context) {
+antlrcpp::Any Interpreter::visitOperatorMulDivMod(LuaParser::OperatorMulDivModContext *context) {
     std::string symbol(context->getText());
 
     if (symbol == "*") {
@@ -844,7 +844,7 @@ antlrcpp::Any MyLuaVisitor::visitOperatorMulDivMod(LuaParser::OperatorMulDivModC
     }
 }
 
-antlrcpp::Any MyLuaVisitor::visitOperatorBitwise(LuaParser::OperatorBitwiseContext *context) {
+antlrcpp::Any Interpreter::visitOperatorBitwise(LuaParser::OperatorBitwiseContext *context) {
     std::string symbol(context->getText());
 
     if (symbol == "&") {
@@ -862,7 +862,7 @@ antlrcpp::Any MyLuaVisitor::visitOperatorBitwise(LuaParser::OperatorBitwiseConte
     }
 }
 
-antlrcpp::Any MyLuaVisitor::visitOperatorUnary(LuaParser::OperatorUnaryContext *context) {
+antlrcpp::Any Interpreter::visitOperatorUnary(LuaParser::OperatorUnaryContext *context) {
     std::string symbol(context->getText());
 
     if (symbol == "not") {
@@ -878,11 +878,11 @@ antlrcpp::Any MyLuaVisitor::visitOperatorUnary(LuaParser::OperatorUnaryContext *
     }
 }
 
-antlrcpp::Any MyLuaVisitor::visitOperatorPower(LuaParser::OperatorPowerContext *) {
+antlrcpp::Any Interpreter::visitOperatorPower(LuaParser::OperatorPowerContext *) {
     return nullptr;
 }
 
-antlrcpp::Any MyLuaVisitor::visitNumber(LuaParser::NumberContext *context) {
+antlrcpp::Any Interpreter::visitNumber(LuaParser::NumberContext *context) {
     if (auto ptr = context->INT()) {
         return Types::Var::make(Types::Value::make_int(std::stoi(ptr->getText())));
     } else if (auto ptr = context->HEX()) {
@@ -897,7 +897,7 @@ antlrcpp::Any MyLuaVisitor::visitNumber(LuaParser::NumberContext *context) {
     }
 }
 
-antlrcpp::Any MyLuaVisitor::visitString(LuaParser::StringContext *context) {
+antlrcpp::Any Interpreter::visitString(LuaParser::StringContext *context) {
     if (auto ptr = context->NORMALSTRING()) {
         std::string text(ptr->getText());
         return Types::Var::make(Types::Value::make_string(text.substr(1, text.size() - 2)));
@@ -912,21 +912,21 @@ antlrcpp::Any MyLuaVisitor::visitString(LuaParser::StringContext *context) {
     }
 }
 
-MyLuaVisitor::ArgsVisitor::ArgsVisitor(std::vector<Types::Value>& dest) : _dest(dest) { }
+Interpreter::ArgsVisitor::ArgsVisitor(std::vector<Types::Value>& dest) : _dest(dest) { }
 
-void MyLuaVisitor::ArgsVisitor::operator()(std::vector<Types::Var> const& args) {
+void Interpreter::ArgsVisitor::operator()(std::vector<Types::Var> const& args) {
     std::transform(args.begin(), args.end(), std::back_inserter(_dest), [](Types::Var const& var) { return var.get(); });
 }
 
-void MyLuaVisitor::ArgsVisitor::operator()(TableConstructor const& cons) {
+void Interpreter::ArgsVisitor::operator()(TableConstructor const& cons) {
     _dest.push_back(cons._var.get());
 }
 
-void MyLuaVisitor::ArgsVisitor::operator()(String const& string) {
+void Interpreter::ArgsVisitor::operator()(String const& string) {
     _dest.push_back(string._var.get());
 }
 
-void MyLuaVisitor::process_stat_var_list(LuaParser::VarlistContext* varlist, LuaParser::ExplistContext* explist) {
+void Interpreter::process_stat_var_list(LuaParser::VarlistContext* varlist, LuaParser::ExplistContext* explist) {
     std::vector<Types::Var> vars = visit(varlist).as<std::vector<Types::Var>>();
     std::vector<Types::Var> exprs = visit(explist).as<std::vector<Types::Var>>();
 
@@ -977,15 +977,15 @@ void MyLuaVisitor::process_stat_var_list(LuaParser::VarlistContext* varlist, Lua
     }
 }
 
-void MyLuaVisitor::process_break() {
+void Interpreter::process_break() {
     throw Exceptions::Break();
 }
 
-void MyLuaVisitor::process_goto(std::string const& label) {
+void Interpreter::process_goto(std::string const& label) {
     throw Exceptions::Goto(label);
 }
 
-void MyLuaVisitor::process_while(LuaParser::ExpContext* exp, LuaParser::BlockContext* block) {
+void Interpreter::process_while(LuaParser::ExpContext* exp, LuaParser::BlockContext* block) {
     LuaParser::BlockContext* current = current_block();
     try {
         while (visit(exp).as<Types::Var>().as_bool_weak()) {
@@ -996,7 +996,7 @@ void MyLuaVisitor::process_while(LuaParser::ExpContext* exp, LuaParser::BlockCon
     }
 }
 
-void MyLuaVisitor::process_repeat(LuaParser::BlockContext* block, LuaParser::ExpContext* exp) {
+void Interpreter::process_repeat(LuaParser::BlockContext* block, LuaParser::ExpContext* exp) {
     LuaParser::BlockContext* current = current_block();
     try {
         do {
@@ -1007,7 +1007,7 @@ void MyLuaVisitor::process_repeat(LuaParser::BlockContext* block, LuaParser::Exp
     }
 }
 
-void MyLuaVisitor::process_if(LuaParser::StatContext* ctx) {
+void Interpreter::process_if(LuaParser::StatContext* ctx) {
     std::vector<LuaParser::ExpContext*> conditions = ctx->exp();
 
     bool found = false;
@@ -1027,7 +1027,7 @@ void MyLuaVisitor::process_if(LuaParser::StatContext* ctx) {
     }
 }
 
-void MyLuaVisitor::process_for_in(LuaParser::NamelistContext* nl, LuaParser::ExplistContext* el, LuaParser::BlockContext* block) {
+void Interpreter::process_for_in(LuaParser::NamelistContext* nl, LuaParser::ExplistContext* el, LuaParser::BlockContext* block) {
     std::vector<std::string> names = visit(nl).as<std::vector<std::string>>();
     std::vector<Types::Var> exprs = visit(el).as<std::vector<Types::Var>>();
 
@@ -1038,7 +1038,7 @@ void MyLuaVisitor::process_for_in(LuaParser::NamelistContext* nl, LuaParser::Exp
     }
 }
 
-void MyLuaVisitor::process_for_loop(LuaParser::StatContext* ctx) {
+void Interpreter::process_for_loop(LuaParser::StatContext* ctx) {
     LuaParser::BlockContext* current = current_block();
     try {
         Types::Value counter = visit(ctx->exp()[0]).as<Types::Var>().get();
@@ -1125,11 +1125,11 @@ void MyLuaVisitor::process_for_loop(LuaParser::StatContext* ctx) {
     }
 }
 
-void MyLuaVisitor::process_function(LuaParser::FuncnameContext* name, LuaParser::FuncbodyContext*) {
+void Interpreter::process_function(LuaParser::FuncnameContext* name, LuaParser::FuncbodyContext*) {
     visit(name);
 }
 
-void MyLuaVisitor::process_local_variables(LuaParser::AttnamelistContext* al, LuaParser::ExplistContext* el) {
+void Interpreter::process_local_variables(LuaParser::AttnamelistContext* al, LuaParser::ExplistContext* el) {
     std::vector<std::string> names = visit(al).as<std::vector<std::string>>();
     std::vector<Types::Var> values;
 
@@ -1192,7 +1192,7 @@ void MyLuaVisitor::process_local_variables(LuaParser::AttnamelistContext* al, Lu
     }
 }
 
-void MyLuaVisitor::process_local_function(std::string const& name, LuaParser::FuncbodyContext* body) {
+void Interpreter::process_local_function(std::string const& name, LuaParser::FuncbodyContext* body) {
     Types::Function* f = new Types::Function(std::move(visit(body->parlist()).as<std::vector<std::string>>()), body->block());
     close_function(f, body->block());
     Types::Value* value = new Types::Value;
@@ -1201,12 +1201,12 @@ void MyLuaVisitor::process_local_function(std::string const& name, LuaParser::Fu
     _local_values.back()[current_block()][name] = value;
 }
 
-Types::Var MyLuaVisitor::nyi(std::string const& str) {
+Types::Var Interpreter::nyi(std::string const& str) {
     std::cout << "[NYI] " << str << std::endl;
     return Types::Var::make(Types::Value::make_nil());
 }
 
-std::pair<Types::Value*, MyLuaVisitor::Scope> MyLuaVisitor::lookup_name(std::string const& name, bool should_throw) {
+std::pair<Types::Value*, Interpreter::Scope> Interpreter::lookup_name(std::string const& name, bool should_throw) {
     Scope scope;
 
     auto contexts = _listener.get_context_for_local(current_block(), name);
@@ -1248,7 +1248,7 @@ std::pair<Types::Value*, MyLuaVisitor::Scope> MyLuaVisitor::lookup_name(std::str
     return std::make_pair(candidate, scope);
 }
 
-LuaParser::BlockContext* MyLuaVisitor::current_block() {
+LuaParser::BlockContext* Interpreter::current_block() {
     if (_blocks.empty()) {
         return nullptr;
     } else {
@@ -1256,7 +1256,7 @@ LuaParser::BlockContext* MyLuaVisitor::current_block() {
     }
 }
 
-Types::Function* MyLuaVisitor::current_function() {
+Types::Function* Interpreter::current_function() {
     if (_functions.empty()) {
         return nullptr;
     } else {
@@ -1264,7 +1264,7 @@ Types::Function* MyLuaVisitor::current_function() {
     }
 }
 
-void MyLuaVisitor::stabilize_blocks(LuaParser::BlockContext* context) {
+void Interpreter::stabilize_blocks(LuaParser::BlockContext* context) {
     if (_blocks.back() != context) {
         size_t n = _blocks.size() - 1;
         while (_blocks[n] != context) {
@@ -1282,19 +1282,19 @@ void MyLuaVisitor::stabilize_blocks(LuaParser::BlockContext* context) {
     }
 }
 
-void MyLuaVisitor::erase_block(LuaParser::BlockContext* context) {
+void Interpreter::erase_block(LuaParser::BlockContext* context) {
     clear_block(context);
     _local_values.back().erase(context);
 }
 
-void MyLuaVisitor::clear_block(LuaParser::BlockContext* context) {
+void Interpreter::clear_block(LuaParser::BlockContext* context) {
     auto& data = _local_values.back()[context];
     for (auto& p: data) {
         p.second->remove_reference();
     }
 }
 
-void MyLuaVisitor::close_function(Types::Function* function, LuaParser::BlockContext* body) {
+void Interpreter::close_function(Types::Function* function, LuaParser::BlockContext* body) {
     auto pair = _listener.get_parents_of_function(body);
     for (auto it = pair.first; it != pair.second; ++it) {
         auto& store = _local_values.back()[it->second];
@@ -1304,7 +1304,7 @@ void MyLuaVisitor::close_function(Types::Function* function, LuaParser::BlockCon
     }
 }
 
-std::vector<Types::Var> MyLuaVisitor::call_function(Types::Function* function, std::vector<Types::Value> const& values) {
+std::vector<Types::Var> Interpreter::call_function(Types::Function* function, std::vector<Types::Value> const& values) {
     LuaParser::BlockContext* ctx = function->get_context();
     LuaParser::BlockContext* current_block = this->current_block();
 
@@ -1359,7 +1359,7 @@ std::vector<Types::Var> MyLuaVisitor::call_function(Types::Function* function, s
     }
 }
 
-bool MyLuaVisitor::funcall_test_infrastructure(LuaParser::FunctioncallContext* context) {
+bool Interpreter::funcall_test_infrastructure(LuaParser::FunctioncallContext* context) {
     if (!context->varOrExp()->var_()) {
         return false;
     }
@@ -1455,7 +1455,7 @@ bool MyLuaVisitor::funcall_test_infrastructure(LuaParser::FunctioncallContext* c
     return true;
 }
 
-Types::Var MyLuaVisitor::process_names_and_args(Types::Var const& src, std::vector<NameAndArgs> const& names_and_args) {
+Types::Var Interpreter::process_names_and_args(Types::Var const& src, std::vector<NameAndArgs> const& names_and_args) {
     Types::Var result = src;
     for (NameAndArgs const& name_and_args: names_and_args) {
         Types::Function* function;

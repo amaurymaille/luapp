@@ -6,7 +6,7 @@
 
 #include "LuaParser.h"
 
-class MyLuaVisitor;
+class Interpreter;
 
 namespace Types {
     struct Value;
@@ -221,7 +221,7 @@ namespace Types {
         friend void Table::add_field(const Value&, const Value&);
         friend Value& Table::subscript(const Value &);
         friend Value& Table::dot(const std::string &);
-        friend MyLuaVisitor;
+        friend Interpreter;
 
         bool operator==(const Value& other) const;
         bool operator!=(const Value& other) const;

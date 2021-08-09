@@ -13,11 +13,11 @@
 #include "syntactic_analyzer.h"
 #include "types.h"
 
-class MyLuaVisitor : public LuaVisitor {
+class Interpreter : public LuaVisitor {
 public:
-    MyLuaVisitor(antlr4::tree::ParseTree* tree);
+    Interpreter(antlr4::tree::ParseTree* tree);
 
-    ~MyLuaVisitor();
+    ~Interpreter();
 
     virtual antlrcpp::Any visitChunk(LuaParser::ChunkContext *context);
 

@@ -54,7 +54,7 @@ void run_test(std::string const& path) {
     antlr4::tree::ParseTree* tree = parser.chunk();
     std::cout << tree->toStringTree(&parser, true) << std::endl;
     try {
-        MyLuaVisitor visitor(tree);
+        Interpreter visitor(tree);
         visitor.visit(tree);
         std::cout << "[OK] " << path << std::endl;
     } catch (std::exception& e) {
