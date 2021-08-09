@@ -14,5 +14,5 @@ include_directories("${Boost_INCLUDE_DIR}" "/usr/include/antlr4-runtime")
 link_directories("/usr/lib/x86_64-linux-gnu")
 
 add_executable(function_embedding main.cpp)
-add_executable(parser parser.cpp LuaLexer.cpp LuaParser.cpp LuaVisitor.cpp)
-target_link_libraries (parser antlr4-runtime "${Boost_PROGRAM_OPTIONS_LIBRARY}")
+add_executable(interpreter interpreter.cpp LuaLexer.cpp LuaParser.cpp LuaVisitor.cpp syntactic_analyzer.cpp types.cpp exceptions.cpp)
+target_link_libraries (interpreter antlr4-runtime "${Boost_PROGRAM_OPTIONS_LIBRARY}")
