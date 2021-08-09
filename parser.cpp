@@ -269,11 +269,13 @@ namespace Types {
         Elipsis(std::vector<Types::Value> const& values) : _values(values) { }
 
         Elipsis(Elipsis const& other) : _values(other._values) {
-            throw std::runtime_error("Copying elipsis is illegal. I think ?");
+            // throw std::runtime_error("Copying elipsis is illegal. I think ?");
         }
 
-        Elipsis& operator=(const Elipsis&) const {
-            throw std::runtime_error("Copying elipsis is illegal. I think ?");
+        Elipsis& operator=(Elipsis const& other) {
+            _values = other._values;
+            return *this;
+            // throw std::runtime_error("Copying elipsis is illegal. I think ?");
         }
 
         bool operator==(const Elipsis&) const {
@@ -291,7 +293,7 @@ namespace Types {
         std::vector<Types::Value> const& values() const { return _values; }
 
     private:
-        std::vector<Types::Value> const& _values;
+        std::vector<Types::Value> _values;
     };
 
     typedef std::variant<bool, int, double, std::string, Nil, Elipsis, Function*, Userdata*, Table*> LuaValue;
