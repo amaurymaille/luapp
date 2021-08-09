@@ -266,7 +266,7 @@ namespace Types {
 
     struct Elipsis {
     public:
-        Elipsis(std::vector<Types::Value*> const& values) : _values(values) { }
+        Elipsis(std::vector<Types::Value> const& values) : _values(values) { }
 
         Elipsis(Elipsis const& other) : _values(other._values) {
             throw std::runtime_error("Copying elipsis is illegal. I think ?");
@@ -288,10 +288,10 @@ namespace Types {
             return true;
         }
 
-        std::vector<Types::Value*> const& values() const { return _values; }
+        std::vector<Types::Value> const& values() const { return _values; }
 
     private:
-        std::vector<Types::Value*> const& _values;
+        std::vector<Types::Value> const& _values;
     };
 
     typedef std::variant<bool, int, double, std::string, Nil, Elipsis, Function*, Userdata*, Table*> LuaValue;
@@ -2321,16 +2321,15 @@ public:
             // Immediately expand the last argument if it is an elipsis or
             // a list of values. This will help when processing arguments
             // further down the road.
+            std::vector<Types::Value> remains;
             if (last.is<Types::Elipsis>()) {
-                std::vector<Types::Value*> const& remains = last.as<Types::Elipsis>().values();
-                for (Types::Value* value: remains) {
-                    values.push_back(Types::Var::make(value));
-                }
+                remains = last.as<Types::Elipsis>().values();
             } else if (last.list()) {
-                std::vector<Types::Value> const& remains = last._list();
-                for (Types::Value const& value: remains) {
-                    values.push_back(Types::Var::make(value));
-                }
+                remains = last._list();
+            }
+
+            for (Types::Value const& value: remains) {
+                values.push_back(Types::Var::make(value));
             }
         } else if (context->tableconstructor()) {
             TableConstructor constructor;
@@ -2694,23 +2693,27 @@ private:
         if (exprs.size() < vars.size()) {
             Types::Var& last = exprs.back();
             unsigned int i = exprs.size();
+            unsigned int j;
+            std::vector<Types::Value> remains;
 
             if (last.is<Types::Elipsis>() || last.list()) {
                 if (last.is<Types::Elipsis>()) {
-                    std::vector<Types::Value*> remains = last.as<Types::Elipsis>().values();
-                    for (unsigned int j = 0; j < remains.size() && i < vars.size(); ++i, ++j) {
-                        sGC->remove_reference(vars[i]._lvalue()->value());
-                        vars[i]._lvalue()->value() = remains[j]->value();
-                        sGC->add_reference(remains[j]->value());
-                    }
+                    j = 0;
+                    --i; // Rewrite the last value because it actually holds
+                         // the whole Elipsis, instead of its first value.
+                    remains = last.as<Types::Elipsis>().values();
                 } else {
-                    std::vector<Types::Value> remains(std::move(last._list()));
-                    for (unsigned int j = 1; j < remains.size() && i < vars.size(); ++i, ++j) {
-                        sGC->remove_reference(vars[i]._lvalue()->value());
-                        vars[i]._lvalue()->value() = remains[j].value();
-                        sGC->add_reference(remains[j].value());
-                    }
+                    j = 1;
+                    remains = std::move(last._list());
                 }
+            }
+
+            for (; j < remains.size() && i < vars.size(); ++i, ++j) {
+                if (i >= exprs.size()) {
+                    sGC->remove_reference(vars[i]._lvalue()->value());
+                }
+                vars[i]._lvalue()->value() = remains[j].value();
+                sGC->add_reference(remains[j].value());
             }
 
             for (; i < vars.size(); ++i) {
@@ -2896,31 +2899,36 @@ private:
         if (values.size() < names.size()) {
             Types::Var& last = values.back();
             unsigned int i = values.size();
+            unsigned int j;
+
+            std::vector<Types::Value> remains;
 
             if (last.is<Types::Elipsis>() || last.list()) {
                 if (last.is<Types::Elipsis>()) {
-                    std::vector<Types::Value*> remains = last.as<Types::Elipsis>().values();
-                    for (unsigned int j = 0; j < remains.size() && i < names.size(); ++i, ++j) {
-                        auto it = _local_values.back()[current_block()].find(names[i]);
-                        if (it == _local_values.back()[current_block()].end()) {
-                            _local_values.back()[current_block()][names[i]] = new Types::Value();
-                        }
-
-                        _local_values.back()[current_block()][names[i]]->value() = remains[j]->value();
-                        sGC->add_reference(remains[j]->value());
-                    }
+                    remains = last.as<Types::Elipsis>().values();
+                    j = 0;
+                    --i;
                 } else {
-                    std::vector<Types::Value> remains(std::move(last._list()));
-                    for (unsigned int j = 1; j < remains.size() && i < names.size(); ++i, ++j) {
-                        auto it = _local_values.back()[current_block()].find(names[i]);
-                        if (it == _local_values.back()[current_block()].end()) {
-                            _local_values.back()[current_block()][names[i]] = new Types::Value();
-                        }
-
-                        sGC->add_reference(remains[j].value());
-                        _local_values.back()[current_block()][names[i]]->value() = remains[j].value();
-                    }
+                    remains = std::move(last._list());
+                    j = 1;
                 }
+            }
+
+            for (; j < remains.size() && i < names.size(); ++i, ++j) {
+                auto it = _local_values.back()[current_block()].find(names[i]);
+                if (it == _local_values.back()[current_block()].end()) {
+                    _local_values.back()[current_block()][names[i]] = new Types::Value();
+                }
+
+                // Remove reference to the elipsis stored in the last named value
+                // assigned. This is normally useless as Elipsis is not a
+                // refcounted type, but who knows how things may evolve.
+                if (i < values.size()) {
+                    sGC->remove_reference(_local_values.back()[current_block()][names[i]]->value());
+                }
+
+                sGC->add_reference(remains[j].value());
+                _local_values.back()[current_block()][names[i]]->value() = remains[j].value();
             }
 
             for (; i < names.size(); ++i) {
@@ -3071,12 +3079,9 @@ private:
         } else if (i < values.size()) {
             if (function->formal_parameters().back() == "...") {
                 Types::Value* elipsis = new Types::Value();
-                std::vector<Types::Value*> elipsis_values;
+                std::vector<Types::Value> elipsis_values;
                 for (; i < values.size(); ++i) {
-                    Types::Value* value = new Types::Value();
-                    value->value() = values[i].value();
-                    sGC->add_reference(values[i].value());
-                    elipsis_values.push_back(value);
+                    elipsis_values.push_back(values[i]);
                 }
                 elipsis->value() = Types::Elipsis(elipsis_values);
                 _local_values.back()[ctx]["..."] = elipsis;
