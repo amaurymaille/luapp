@@ -87,6 +87,15 @@ public:
     BadCall(std::string const& type);
 };
 
+class BadForIn : public string_exception {
+public:
+    BadForIn();
+};
+
+class ForInBadType : public string_exception {
+public:
+    ForInBadType(std::string const& type);
+};
 
 // ============================================================================
 // Control-flow exceptions

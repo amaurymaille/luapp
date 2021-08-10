@@ -1031,10 +1031,114 @@ void Interpreter::process_for_in(LuaParser::NamelistContext* nl, LuaParser::Expl
     std::vector<std::string> names = visit(nl).as<std::vector<std::string>>();
     std::vector<Types::Var> exprs = visit(el).as<std::vector<Types::Var>>();
 
+    /* for var1, ..., varn in exprlist do
+     *   stmts
+     * end
+     *
+     * <=>
+     *
+     * do
+     *   local f, s, var = exprlist
+     *   while true do
+     *     local var1, ..., varn = f(s, var)
+     *     if var1 == nil then break end
+     *     var = var1
+     *     stmts
+     *   end
+     * end
+     *
+     * loop_values holds the results of exprlist.
+     */
+    std::vector<Types::Value> loop_values;
+    for (unsigned int i = 0; i < exprs.size() - 1; ++i) {
+        loop_values.push_back(exprs[i].get());
+    }
+
+    // Expand only the last element of the expression list, as always.
+    // Yes I could factor it, but how do I keep those sweet sweet references ?
+    if (exprs.back().list()) {
+        std::vector<Types::Value> const& values = exprs.back()._list();
+        std::ranges::for_each(values, [&loop_values](Types::Value const& value) { loop_values.push_back(value);});
+    } else if (exprs.back().is<Types::Elipsis>()) {
+        std::vector<Types::Value> const& values = exprs.back().as<Types::Elipsis>().values();
+        std::ranges::for_each(values, [&loop_values](Types::Value const& value) { loop_values.push_back(value);});
+    }
+
+    if (loop_values.size() < 1) {
+        throw Exceptions::BadForIn();
+    }
+
+    if (!loop_values.front().is<Types::Function*>()) {
+        throw Exceptions::ForInBadType(loop_values.front().type_as_string());
+    }
+
+    LuaParser::BlockContext* current = current_block();
+    _blocks.push_back(block);
+
+    Types::Value state;
+    Types::Value iteration_value;
+
+    if (loop_values.size() >= 2) {
+        state = loop_values[1];
+    }
+
+    if (loop_values.size() >= 3) {
+        iteration_value = loop_values[2];
+    }
+
     try {
+        while (true) {
+            std::vector<Types::Var> results = call_function(loop_values.front().as<Types::Function*>(), std::vector<Types::Value>{state, iteration_value});
+            if (results.size() == 0 || results[0].is<Types::Nil>()) {
+                throw Exceptions::Break();
+            }
 
+            iteration_value = results[0].get();
+
+            for (unsigned int i = 0; i < std::min(results.size(), names.size()); ++i) {
+                Types::Value* value = new Types::Value;
+                *value = results[i].get();
+                _local_values.back()[block][names[i]] = value;
+            }
+
+            if (results.size() < names.size()) {
+                unsigned int i;
+                if (results.back().is<Types::Elipsis>()) {
+                    std::vector<Types::Value> const& remains = results.back().as<Types::Elipsis>().values();
+                    i = results.size() - 1;
+                    for (unsigned int j = 0 ; j < remains.size() && i < names.size(); ++i, ++j) {
+                        if (i < results.size()) {
+                            sGC->remove_reference(_local_values.back()[block][names[i]]->value());
+                            *(_local_values.back()[block][names[i]]) = remains[j];
+                        } else {
+                            Types::Value* value = new Types::Value;
+                            *value = remains[j];
+                            _local_values.back()[block][names[i]] = value;
+                        }
+                    }
+                } else if (results.back().list()) {
+                    std::vector<Types::Value> const& remains = results.back()._list();
+                    i = results.size();
+                    for (unsigned int j = 1; j < remains.size() && i < names.size(); ++i, ++j) {
+                        Types::Value* value = new Types::Value;
+                        *value = remains[j];
+                        _local_values.back()[block][names[i]] = value;
+                    }
+                }
+
+                for (; i < names.size(); ++i) {
+                    _local_values.back()[block][names[i]] = new Types::Value;
+                }
+            }
+
+            _coming_from_for = true;
+            visit(block);
+
+            clear_block(block);
+            _local_values.back()[block].clear();
+        }
     } catch (Exceptions::Break& brk) {
-
+        stabilize_blocks(current);
     }
 }
 

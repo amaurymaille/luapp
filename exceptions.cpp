@@ -72,4 +72,12 @@ BadCall::BadCall(std::string const& type) {
     _error = "Attempted to call a function on " + type;
 }
 
+BadForIn::BadForIn() {
+    _error = "No iteration function available for `for in`\n";
+}
+
+ForInBadType::ForInBadType(const std::string &type) {
+    _error = "First result of expression of `for in` is " + type + ", expected function\n";
+}
+
 }
