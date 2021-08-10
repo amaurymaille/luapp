@@ -15,6 +15,7 @@
 
 class Interpreter : public LuaVisitor {
 public:
+    Interpreter() { }
     Interpreter(antlr4::tree::ParseTree* tree);
 
     ~Interpreter();
@@ -92,6 +93,10 @@ public:
     virtual antlrcpp::Any visitNumber(LuaParser::NumberContext *context);
 
     virtual antlrcpp::Any visitString(LuaParser::StringContext *context);
+
+    void launch(antlr4::tree::ParseTree* tree);
+
+    void register_global_c_function(std::string const& name, Types::Function* function);
 
 private:
     enum class OperatorComparison {
@@ -231,6 +236,8 @@ private:
     void close_function(Types::Function* function, LuaParser::BlockContext* body);
 
     std::vector<Types::Var> call_function(Types::Function* function, std::vector<Types::Value> const& values);
+
+    std::vector<Types::Var> call_c_function(Types::Function* function, std::vector<Types::Value> const& values);
 
     bool funcall_test_infrastructure(LuaParser::FunctioncallContext* context);
 

@@ -50,14 +50,22 @@ bool Elipsis::operator<(const Elipsis&) const {
 // ============================================================================
 // Function
 
-Function::Function(std::vector<std::string>&& formal_parameters, LuaParser::BlockContext* body) :
-    _body(body), _formal_parameters(std::move(formal_parameters)) {
+Function::Function(std::vector<std::string>&& formal_parameters, LuaParser::BlockContext* body) {
+    _function = PureLuaFunction();
+    pure()._body = body;
+    pure()._formal_parameters = std::move(formal_parameters);
+}
 
+Function::Function(FunctionAbstractionBuilderAbstraction *builder) {
+    _function = CLuaFunction();
+    c()._builder = builder;
 }
 
 Function::~Function() {
-    for (Value* v: std::views::values(_closure)) {
-        v->remove_reference();
+    if (std::holds_alternative<PureLuaFunction>(_function)) {
+        for (Value* v: std::views::values(pure()._closure)) {
+            v->remove_reference();
+        }
     }
 }
 
@@ -70,12 +78,28 @@ bool Function::operator!=(const Function& other) const {
 }
 
 void Function::close(std::string const& name, Value* value) {
-    if (_closure.find(name) != _closure.end()) {
+    if (pure()._closure.find(name) != pure()._closure.end()) {
         throw std::runtime_error("Closing function twice under " + name);
     }
 
-    _closure[name] = value;
+    pure()._closure[name] = value;
     value->add_reference();
+}
+
+Function::PureLuaFunction& Function::pure() {
+    return std::get<PureLuaFunction>(_function);
+}
+
+Function::CLuaFunction& Function::c() {
+    return std::get<CLuaFunction>(_function);
+}
+
+const Function::PureLuaFunction& Function::pure() const {
+    return std::get<PureLuaFunction>(_function);
+}
+
+const Function::CLuaFunction& Function::c() const {
+    return std::get<CLuaFunction>(_function);
 }
 
 // ============================================================================

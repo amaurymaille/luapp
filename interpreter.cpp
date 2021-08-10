@@ -23,13 +23,13 @@
 #include "LuaVisitor.h"
 
 #include "exceptions.h"
+#include "function_abstraction.h"
 #include "interpreter.h"
 #include "syntactic_analyzer.h"
 #include "types.h"
 
 Interpreter::Interpreter(antlr4::tree::ParseTree* tree) {
-    antlr4::tree::ParseTreeWalker::DEFAULT.walk(&_listener, tree);
-    _listener.validate_gotos();
+    launch(tree);
 }
 
 Interpreter::~Interpreter() {
@@ -44,6 +44,18 @@ Interpreter::~Interpreter() {
             }
         }
     }
+}
+
+void Interpreter::launch(antlr4::tree::ParseTree *tree) {
+    antlr4::tree::ParseTreeWalker::DEFAULT.walk(&_listener, tree);
+    _listener.validate_gotos();
+}
+
+void Interpreter::register_global_c_function(const std::string &name, Types::Function *function) {
+    Types::Value* value = new Types::Value;
+    value->value() = function;
+    sGC->add_reference(value->value());
+    _global_values[name] = value;
 }
 
 antlrcpp::Any Interpreter::visitChunk(LuaParser::ChunkContext *context) {
@@ -1436,6 +1448,10 @@ void Interpreter::close_function(Types::Function* function, LuaParser::BlockCont
 }
 
 std::vector<Types::Var> Interpreter::call_function(Types::Function* function, std::vector<Types::Value> const& values) {
+    if (function->is_c()) {
+        return call_c_function(function, values);
+    }
+
     LuaParser::BlockContext* ctx = function->get_context();
     LuaParser::BlockContext* current_block = this->current_block();
 
@@ -1445,7 +1461,6 @@ std::vector<Types::Var> Interpreter::call_function(Types::Function* function, st
         _local_values.back()[p.first] = p.second;
     } */
     _functions.push_back(function);
-
 
     unsigned int i = 0;
     for (; i < std::min(values.size(), function->formal_parameters().size()); ++i) {
@@ -1488,6 +1503,19 @@ std::vector<Types::Var> Interpreter::call_function(Types::Function* function, st
         _local_values.pop_back();
         return e.get();
     }
+}
+
+std::vector<Types::Var> Interpreter::call_c_function(Types::Function *function, const std::vector<Types::Value> &values) {
+    FunctionAbstractionBuilderAbstraction* builder = function->builder();
+    FunctionAbstraction* abstraction = builder->build();
+
+    for (Types::Value const& value: values) {
+        abstraction->bind_next(value);
+    }
+
+    abstraction->call();
+
+    return std::vector<Types::Var>();
 }
 
 bool Interpreter::funcall_test_infrastructure(LuaParser::FunctioncallContext* context) {

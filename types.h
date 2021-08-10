@@ -1,10 +1,18 @@
 #pragma once
 
+#include <any>
 #include <string>
+#include <typeindex>
+#include <typeinfo>
 #include <variant>
 #include <vector>
 
 #include "LuaParser.h"
+
+#include "exceptions.h"
+#include "meta_types.h"
+
+class FunctionAbstractionBuilderAbstraction;
 
 class Interpreter;
 
@@ -42,6 +50,7 @@ namespace Types {
     class Function {
     public:
         Function(std::vector<std::string>&& formal_parameters, LuaParser::BlockContext* body);
+        Function(FunctionAbstractionBuilderAbstraction* builder);
 
         ~Function();
 
@@ -50,16 +59,47 @@ namespace Types {
 
         void close(std::string const& name, Value* value);
 
-        std::map<std::string, Value*> const& closure() const { return _closure; }
-        LuaParser::BlockContext* get_context() const { return _body; }
-        std::vector<std::string> const& formal_parameters() const { return _formal_parameters; }
+        std::map<std::string, Value*> const& closure() const {
+            return pure()._closure;
+        }
+
+        LuaParser::BlockContext* get_context() const {
+            return pure()._body;
+        }
+
+        std::vector<std::string> const& formal_parameters() const {
+            return pure()._formal_parameters;
+        }
+
+        FunctionAbstractionBuilderAbstraction* builder() {
+            return c()._builder;
+        }
+
+        bool is_pure() const { return std::holds_alternative<PureLuaFunction>(_function); }
+        bool is_c() const { return std::holds_alternative<CLuaFunction>(_function); }
 
     private:
-        // Values under which the function is closed.
-        // Context not preserved because only names are required.
-        std::map<std::string, Value*> _closure;
-        LuaParser::BlockContext* _body;
-        std::vector<std::string> _formal_parameters;
+        struct PureLuaFunction {
+            // Values under which the function is closed.
+            // Context not preserved because only names are required.
+            std::map<std::string, Value*> _closure;
+            LuaParser::BlockContext* _body;
+            std::vector<std::string> _formal_parameters;
+        };
+
+        struct CLuaFunction {
+            FunctionAbstractionBuilderAbstraction* _builder;
+        };
+
+        typedef std::variant<PureLuaFunction, CLuaFunction> LuaFunction;
+
+        PureLuaFunction& pure();
+        CLuaFunction& c();
+
+        PureLuaFunction const& pure() const;
+        CLuaFunction const& c() const;
+
+        LuaFunction _function;
     };
 
     struct Userdata {
@@ -424,5 +464,50 @@ namespace Types {
         }
     };
 
+    class Converter {
+    private:
+        typedef std::function<void(Value const&, std::any&)> ConversionFunction;
+    public:
+        Converter() { }
 
+        template<typename T>
+        void register_conversion(ConversionFunction&& fn) {
+            _conversions[std::type_index(typeid(T))] = std::move(fn);
+        }
+
+        template<typename T>
+        void perform_conversion(Value const& src, std::any& dst) {
+            if constexpr (Meta::is_variant_v<std::decay_t<T>>) {
+                convert_variant<typename Meta::variant_args_al<std::decay_t<T>>, typename Meta::variant_args_al<std::decay_t<T>>>(src, dst);
+            } else if constexpr (Meta::is_optional_v<std::decay_t<T>>) {
+
+            } else {
+                if (_conversions.find(std::type_index(typeid(T))) == _conversions.end()) {
+                    throw std::runtime_error(std::string("Attempting to convert a type that has no registered conversion function: ") + typeid(T).name());
+                }
+                _conversions[std::type_index(typeid(T))](src, dst);
+            }
+        }
+
+    private:
+        std::map<std::type_index, ConversionFunction> _conversions;
+
+        template<typename AL, typename SAL>
+        void convert_variant(Value const& src, std::any& dst) {
+            using T = AL::Head;
+
+            if (src.is<T>()) {
+                std::any res;
+                perform_conversion<T>(src, res);
+                dst = typename Meta::variant_from_al<SAL>::type(std::any_cast<T>(res));
+            } else {
+                if constexpr (AL::end) {
+                    // throw Exceptions::CLua::ExhaustedVariant();
+                    throw std::runtime_error("?");
+                } else {
+                    convert_variant<typename AL::Tail, SAL>(src, dst);
+                }
+            }
+        }
+    };
 }

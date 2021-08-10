@@ -80,4 +80,20 @@ ForInBadType::ForInBadType(const std::string &type) {
     _error = "First result of expression of `for in` is " + type + ", expected function\n";
 }
 
+namespace CLua {
+
+const char* BindOverflow::what() const noexcept {
+    return "Attempted to bind too many parameter to function\n";
+}
+
+const char* UnboundedCall::what() const noexcept {
+    return "Attempted to call function without all parameters bound\n";
+}
+
+const char* ExhaustedVariant::what() const noexcept {
+    return "No suitable conversion found for variant\n";
+}
+
+}
+
 }

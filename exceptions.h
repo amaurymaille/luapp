@@ -97,6 +97,25 @@ public:
     ForInBadType(std::string const& type);
 };
 
+namespace CLua {
+
+class BindOverflow : public std::exception {
+public:
+    const char* what() const noexcept;
+};
+
+class UnboundedCall : public std::exception {
+public:
+    const char* what() const noexcept;
+};
+
+class ExhaustedVariant : public std::exception {
+public:
+    const char* what() const noexcept;
+};
+
+}
+
 // ============================================================================
 // Control-flow exceptions
 
