@@ -664,16 +664,18 @@ antlrcpp::Any Interpreter::visitArgs(LuaParser::ArgsContext *context) {
     if (context->explist()) {
         args = visit(context->explist()).as<std::vector<Types::Var>>();
         std::vector<Types::Var>& values = std::get<std::vector<Types::Var>>(args);
-        Types::Var& last = values.back();
 
         // Immediately expand the last argument if it is an elipsis or
         // a list of values. This will help when processing arguments
         // further down the road.
         std::vector<Types::Value> remains;
-        if (last.is<Types::Elipsis>()) {
-            remains = last.as<Types::Elipsis>().values();
-        } else if (last.list()) {
-            remains = last._list();
+        if (values.size() != 0) {
+            Types::Var& last = values.back();
+            if (last.is<Types::Elipsis>()) {
+                remains = last.as<Types::Elipsis>().values();
+            } else if (last.list()) {
+                remains = last._list();
+            }
         }
 
         for (Types::Value const& value: remains) {
@@ -945,31 +947,35 @@ void Interpreter::process_stat_var_list(LuaParser::VarlistContext* varlist, LuaP
     }
 
     // Adjust for elipsis / value list
+    unsigned int i = exprs.size();
     if (exprs.size() < vars.size()) {
-        Types::Var& last = exprs.back();
-        unsigned int i = exprs.size();
-        unsigned int j;
-        std::vector<Types::Value> remains;
+        if (exprs.size() != 0) {
+            std::vector<Types::Value> remains;
+            unsigned int j;
+            Types::Var& last = exprs.back();
 
-        if (last.is<Types::Elipsis>() || last.list()) {
-            if (last.is<Types::Elipsis>()) {
-                j = 0;
-                --i; // Rewrite the last value because it actually holds
-                     // the whole Elipsis, instead of its first value.
-                remains = last.as<Types::Elipsis>().values();
-            } else {
-                j = 1;
-                remains = std::move(last._list());
+            if (last.is<Types::Elipsis>() || last.list()) {
+                if (last.is<Types::Elipsis>()) {
+                    j = 0;
+                    --i; // Rewrite the last value because it actually holds
+                         // the whole Elipsis, instead of its first value.
+                    remains = last.as<Types::Elipsis>().values();
+                } else {
+                    j = 1;
+                    remains = std::move(last._list());
+                }
+            }
+
+            for (; j < remains.size() && i < vars.size(); ++i, ++j) {
+                if (i >= exprs.size()) {
+                    sGC->remove_reference(vars[i]._lvalue()->value());
+                }
+                vars[i]._lvalue()->value() = remains[j].value();
+                sGC->add_reference(remains[j].value());
             }
         }
 
-        for (; j < remains.size() && i < vars.size(); ++i, ++j) {
-            if (i >= exprs.size()) {
-                sGC->remove_reference(vars[i]._lvalue()->value());
-            }
-            vars[i]._lvalue()->value() = remains[j].value();
-            sGC->add_reference(remains[j].value());
-        }
+
 
         for (; i < vars.size(); ++i) {
             vars[i]._lvalue()->value() = Types::Nil();
@@ -1052,6 +1058,10 @@ void Interpreter::process_for_in(LuaParser::NamelistContext* nl, LuaParser::Expl
     std::vector<Types::Value> loop_values;
     for (unsigned int i = 0; i < exprs.size() - 1; ++i) {
         loop_values.push_back(exprs[i].get());
+    }
+
+    if (exprs.size() == 0) {
+        throw std::runtime_error("How the hell did you produce an empty expression vector in a `for in`?");
     }
 
     // Expand only the last element of the expression list, as always.
@@ -1254,41 +1264,43 @@ void Interpreter::process_local_variables(LuaParser::AttnamelistContext* al, Lua
         sGC->add_reference(values[i].get().value());
     }
 
+    unsigned int i = values.size();
     // Adjust
     if (values.size() < names.size()) {
-        Types::Var& last = values.back();
-        unsigned int i = values.size();
-        unsigned int j;
+        if (values.size() != 0) {
+            unsigned int j;
+            std::vector<Types::Value> remains;
+            Types::Var& last = values.back();
 
-        std::vector<Types::Value> remains;
+            if (last.is<Types::Elipsis>() || last.list()) {
+                if (last.is<Types::Elipsis>()) {
+                    remains = last.as<Types::Elipsis>().values();
+                    j = 0;
+                    --i;
+                } else {
+                    remains = std::move(last._list());
+                    j = 1;
+                }
+            }
 
-        if (last.is<Types::Elipsis>() || last.list()) {
-            if (last.is<Types::Elipsis>()) {
-                remains = last.as<Types::Elipsis>().values();
-                j = 0;
-                --i;
-            } else {
-                remains = std::move(last._list());
-                j = 1;
+            for (; j < remains.size() && i < names.size(); ++i, ++j) {
+                auto it = _local_values.back()[current_block()].find(names[i]);
+                if (it == _local_values.back()[current_block()].end()) {
+                    _local_values.back()[current_block()][names[i]] = new Types::Value();
+                }
+
+                // Remove reference to the elipsis stored in the last named value
+                // assigned. This is normally useless as Elipsis is not a
+                // refcounted type, but who knows how things may evolve.
+                if (i < values.size()) {
+                    sGC->remove_reference(_local_values.back()[current_block()][names[i]]->value());
+                }
+
+                sGC->add_reference(remains[j].value());
+                _local_values.back()[current_block()][names[i]]->value() = remains[j].value();
             }
         }
 
-        for (; j < remains.size() && i < names.size(); ++i, ++j) {
-            auto it = _local_values.back()[current_block()].find(names[i]);
-            if (it == _local_values.back()[current_block()].end()) {
-                _local_values.back()[current_block()][names[i]] = new Types::Value();
-            }
-
-            // Remove reference to the elipsis stored in the last named value
-            // assigned. This is normally useless as Elipsis is not a
-            // refcounted type, but who knows how things may evolve.
-            if (i < values.size()) {
-                sGC->remove_reference(_local_values.back()[current_block()][names[i]]->value());
-            }
-
-            sGC->add_reference(remains[j].value());
-            _local_values.back()[current_block()][names[i]]->value() = remains[j].value();
-        }
 
         for (; i < names.size(); ++i) {
             _local_values.back()[current_block()][names[i]] = new Types::Value();
