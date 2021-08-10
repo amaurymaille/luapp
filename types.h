@@ -75,8 +75,8 @@ namespace Types {
         bool operator!=(const Table& other) const;
 
         int border() const;
-        Value& subscript(Value const&);
-        Value& dot(std::string const&);
+        Value& subscript(Value const&, bool set_nil = false);
+        Value& dot(std::string const&, bool set_nil = false);
         void add_field(std::string const& name, Value const& value);
         void add_field(Value const& source, Value const& dst);
 
@@ -104,7 +104,7 @@ namespace Types {
 
         struct FieldGetter {
         public:
-            FieldGetter(Table& t);
+            FieldGetter(Table& t, bool set_nil = false);
 
             Value& operator()(Nil);
             Value& operator()(int i);
@@ -118,6 +118,7 @@ namespace Types {
 
         private:
             Table& _t;
+            bool _set_nil = false;
         };
 
         friend class Value;
@@ -218,9 +219,10 @@ namespace Types {
         static void init();
 
         friend Table::Table(const std::list<std::pair<Value, Value>>&);
+        friend Table::FieldGetter;
         friend void Table::add_field(const Value&, const Value&);
-        friend Value& Table::subscript(const Value &);
-        friend Value& Table::dot(const std::string &);
+        friend Value& Table::subscript(const Value &, bool);
+        friend Value& Table::dot(const std::string &, bool);
         friend Interpreter;
 
         bool operator==(const Value& other) const;

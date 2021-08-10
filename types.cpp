@@ -134,16 +134,21 @@ int Table::border() const {
     return 0;
 }
 
-Value& Table::subscript(Value const& value) {
-    return std::visit(Table::FieldGetter(*this), value._type);
+Value& Table::subscript(Value const& value, bool set_nil) {
+    return std::visit(Table::FieldGetter(*this, set_nil), value._type);
 }
 
-Value& Table::dot(const std::string &name) {
+Value& Table::dot(const std::string &name, bool set_nil) {
     auto iter = _string_fields.find(name);
     if (iter != _string_fields.end()) {
         return iter->second;
     } else {
-        return Value::_nil;
+        if (set_nil) {
+            _string_fields[name] = Types::Value::_nil;
+            return _string_fields[name];
+        } else {
+            return Value::_nil;
+        }
     }
 }
 
@@ -191,21 +196,91 @@ void Table::FieldSetter::operator()(Userdata* u) {
 // ============================================================================
 // Table::FieldGetter
 
-Table::FieldGetter::FieldGetter(Table& t) : _t(t) { }
+Table::FieldGetter::FieldGetter(Table& t, bool set_nil) : _t(t), _set_nil(set_nil) { }
 
-Value& Table::FieldGetter::operator()(int i) { return _t._int_fields[i]; }
+Value& Table::FieldGetter::operator()(int i) {
+    if (_t._int_fields.find(i) == _t._int_fields.end()) {
+        if (_set_nil) {
+            _t._int_fields[i] = Value::_nil;
+            return _t._int_fields[i];
+        } else {
+            return Value::_nil;
+        }
+    } else {
+        return _t._int_fields[i];
+    }
+}
 
-Value& Table::FieldGetter::operator()(double d) { return _t._double_fields[d]; }
+Value& Table::FieldGetter::operator()(double d) {
+    if (_t._double_fields.find(d) == _t._double_fields.end()) {
+        if (_set_nil) {
+            _t._double_fields[d] = Value::_nil;
+            return _t._double_fields[d];
+        } else {
+            return Value::_nil;
+        }
+    } else {
+        return _t._double_fields[d];
+    }
+}
 
-Value& Table::FieldGetter::operator()(bool b) { return _t._bool_fields[b]; }
+Value& Table::FieldGetter::operator()(bool b) {
+    // No need to check set_nil because the values are already copies of nil
+    // if not assigned.
+    return _t._bool_fields[b];
+}
 
-Value& Table::FieldGetter::operator()(std::string const& s) { return _t._string_fields[s]; }
+Value& Table::FieldGetter::operator()(std::string const& s) {
+    if (_t._string_fields.find(s) == _t._string_fields.end()) {
+        if (_set_nil) {
+            _t._string_fields[s] = Value::_nil;
+            return _t._string_fields[s];
+        } else {
+            return Value::_nil;
+        }
+    } else {
+        return _t._string_fields[s];
+    }
+}
 
-Value& Table::FieldGetter::operator()(Function* f) { return _t._function_fields[f]; }
+Value& Table::FieldGetter::operator()(Function* f) {
+    if (_t._function_fields.find(f) == _t._function_fields.end()) {
+        if (_set_nil) {
+            _t._function_fields[f] = Value::_nil;
+            return _t._function_fields[f];
+        } else {
+            return Value::_nil;
+        }
+    } else {
+        return _t._function_fields[f];
+    }
+}
 
-Value& Table::FieldGetter::operator()(Table* t) { return _t._table_fields[t]; }
+Value& Table::FieldGetter::operator()(Table* t) {
+    if (_t._table_fields.find(t) == _t._table_fields.end()) {
+        if (_set_nil) {
+            _t._table_fields[t] = Value::_nil;
+            return _t._table_fields[t];
+        } else {
+            return Value::_nil;
+        }
+    } else {
+        return _t._table_fields[t];
+    }
+}
 
-Value& Table::FieldGetter::operator()(Userdata* u) { return _t._userdata_fields[u]; }
+Value& Table::FieldGetter::operator()(Userdata* u) {
+    if (_t._userdata_fields.find(u) == _t._userdata_fields.end()) {
+        if (_set_nil) {
+            _t._userdata_fields[u] = Value::_nil;
+            return _t._userdata_fields[u];
+        } else {
+            return Value::_nil;
+        }
+    } else {
+        return _t._userdata_fields[u];
+    }
+}
 
 Value& Table::FieldGetter::operator()(Nil) { throw std::runtime_error("No nil allowed in table"); }
 
@@ -235,6 +310,9 @@ constexpr bool Value::is_refcounted() const {
 }
 
 Value& Value::operator=(const Value& other) {
+    if (this == &Value::_nil || this == &Value::_false || this == &Value::_true) {
+        throw std::runtime_error("Cannot change nil, false or true");
+    }
     _type = other._type;
     if (is_refcounted()) {
         sGC->add_reference(_type);

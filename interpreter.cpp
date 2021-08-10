@@ -615,13 +615,28 @@ antlrcpp::Any Interpreter::visitVar_(LuaParser::Var_Context *context) {
                 throw Exceptions::BadDotAccess(result.type_as_string());
             }
 
-            result = Types::Var::make(&(result.as<Types::Table*>()->subscript(subscript->_value.get())));
+            Types::Value& field = result.as<Types::Table*>()->subscript(subscript->_value.get(), _var__context == Var_Context::VARLIST);
+            if (_var__context == Var_Context::OTHER && &field == &Types::Value::_nil) {
+                result = Types::Var::make(Types::Value::make_nil());
+            } else {
+                result = Types::Var::make(&field);
+            }
         } else if (std::string* str = std::get_if<std::string>(&suffix._suffix)) {
             if (!result.is<Types::Table*>()) {
                 throw Exceptions::BadDotAccess(result.type_as_string());
             }
 
-            result = Types::Var::make(&(result.as<Types::Table*>()->dot(*str)));
+            // If context is varlist, add the field to the table so we can
+            // return its adress and set it later.
+            Types::Value& field = result.as<Types::Table*>()->dot(*str, _var__context == Var_Context::VARLIST);
+
+            // If context is no a varlist, then we need to change the value
+            // inside field, otherwise we may overwrite the value of nil.
+            if (_var__context == Var_Context::OTHER && &field == &Types::Value::_nil) {
+                result = Types::Var::make(Types::Value::make_nil());
+            } else {
+                result = Types::Var::make(&field);
+            }
         } else {
             throw Exceptions::NilDot();
         }
