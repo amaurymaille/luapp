@@ -18,7 +18,7 @@ add_library (lua_core STATIC interpreter.cpp LuaLexer.cpp LuaParser.cpp LuaVisit
     function_abstraction.cpp)
 
 # add_executable(function_embedding main.cpp)
-add_executable(template_erasure main.cpp)
+# add_executable(template_erasure main.cpp)
 add_executable(interpreter_tester test_interpreter.cpp)
 add_executable(playfield playfield.cpp)
 target_link_libraries (interpreter_tester lua_core antlr4-runtime "${Boost_PROGRAM_OPTIONS_LIBRARY}")
